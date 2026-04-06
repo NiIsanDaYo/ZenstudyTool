@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "ZenstudyTool",
+  "version": "2.0",
+  "description": "ZEN Studyの学習体験を最適化するツール（必修フィルタ・時間表示・動画DL）。",
+  "permissions": [
+    "storage",
+    "webRequest",
+    "downloads",
+    "offscreen"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ZenstudyTool Settings",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.nnn.ed.nico/*", "*://www.nnn.ed.nico/*"],
+      "css": ["zenstudy-tool.css"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "host_permissions": [
+    "*://*.nnn.ed.nico/*",
+    "*://*.nicovideo.jp/*",
+    "*://*.dmc.nico/*",
+    "<all_urls>"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
+}
