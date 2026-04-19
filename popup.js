@@ -9,7 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 初期状態を読み込んでUIのスイッチに反映
   chrome.storage.local.get(
-    { forceEssentialEnabled: true, showTotalTime: true, showDailyTarget: true, autoSkipEnabled: false, alwaysFocusEnabled: true, copyTextEnabled: true, downloadEnabled: true },
+    {
+      forceEssentialEnabled: true,
+      showTotalTime: true,
+      showDailyTarget: true,
+      autoSkipEnabled: false,
+      alwaysFocusEnabled: true,
+      copyTextEnabled: true,
+      downloadEnabled: true,
+    },
     (result) => {
       toggleFilter.checked = result.forceEssentialEnabled;
       if (toggleTime) toggleTime.checked = result.showTotalTime;

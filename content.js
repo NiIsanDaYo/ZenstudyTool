@@ -32,6 +32,7 @@ const DOWNLOAD_BUTTON_TEXT = {
   waiting: "URL取得中...",
   preparing: "準備中...",
   downloading: "ダウンロード中...",
+  saving: "保存中...",
   started: "保存開始",
   success: "完了",
   failed: "失敗",
@@ -105,6 +106,32 @@ const formatTime = (seconds) => {
   const minuteStr = `${h ? String(m).padStart(2, "0") : m}:`;
   const secondStr = String(s).padStart(2, "0");
   return `${h ? `${h}:` : ""}${minuteStr}${secondStr}`;
+};
+
+/**
+ * バイト数を読みやすい単位に整形する
+ * @param {number} bytes
+ * @returns {string}
+ */
+const formatByteSize = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0B';
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const fractionDigits = value >= 100 || unitIndex === 0
+    ? 0
+    : value >= 10
+      ? 1
+      : 2;
+
+  return `${value.toFixed(fractionDigits)}${units[unitIndex]}`;
 };
 
 /**
@@ -1416,6 +1443,11 @@ class ZenstudyToolDownloader {
     this.resetTimerId = null;
     this.waitingPollTimerId = null;
     this.activeConversionRequestId = null;
+    this.isDownloading = false;
+    this.nextDownloadSequence = 0;
+    this.activeDownloadSequence = 0;
+    this.activeLessonFingerprint = '';
+    this.activeLessonChangedAt = 0;
     this.chapterDataCache = new Map();
 
     this.handlePotentialLessonSelection = this.handlePotentialLessonSelection.bind(this);
@@ -1428,9 +1460,9 @@ class ZenstudyToolDownloader {
 
     addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
-      const change = changes[STORAGE_KEYS.downloadEnabled];
-      if (change !== undefined) {
-        this.enabled = change.newValue;
+      const downloadChange = changes[STORAGE_KEYS.downloadEnabled];
+      if (downloadChange !== undefined) {
+        this.enabled = downloadChange.newValue;
         if (this.enabled) {
           this.checkAndShow();
         } else {
@@ -1441,8 +1473,8 @@ class ZenstudyToolDownloader {
 
     addSafeRuntimeMessageListener((message) => {
       if (message.type === 'ZST_VIDEO_URL_DETECTED') {
-        this.videoInfo = message.videoInfo;
-        if (this.enabled) this.checkAndShow();
+        const didUpdate = this.applyVideoInfo(message.videoInfo);
+        if (didUpdate && this.enabled) this.checkAndShow();
       } else if (message.type === 'ZST_CONVERSION_PROGRESS') {
         this.updateProgress(message);
       }
@@ -1453,12 +1485,7 @@ class ZenstudyToolDownloader {
     }, 150);
 
     // 初期状態としてBackgroundから動画情報を取得
-    safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response) => {
-      if (response && response.videoInfo) {
-        this.videoInfo = response.videoInfo;
-        if (this.enabled) this.checkAndShow();
-      }
-    });
+    this.requestLatestVideoInfo();
   }
 
   getDownloadButton() {
@@ -1466,6 +1493,67 @@ class ZenstudyToolDownloader {
     const existingBtn = document.getElementById(ELEMENT_IDS.downloadButton);
     this.btn = existingBtn || null;
     return this.btn;
+  }
+
+  getCurrentLessonFingerprint() {
+    const iframe = this.getModalIframe();
+    const src = iframe?.getAttribute('src') || iframe?.src || '';
+    if (!src) return '';
+
+    try {
+      const url = new URL(src, window.location.origin);
+      return `${url.pathname}${url.search}`;
+    } catch (_) {
+      return src;
+    }
+  }
+
+  syncLessonContext() {
+    const nextFingerprint = this.getCurrentLessonFingerprint();
+    if (nextFingerprint === this.activeLessonFingerprint) return false;
+
+    this.activeLessonFingerprint = nextFingerprint;
+    this.activeLessonChangedAt = nextFingerprint ? Date.now() : 0;
+    this.videoInfo = null;
+    this.activeConversionRequestId = null;
+    this.isDownloading = false;
+    this.activeDownloadSequence = 0;
+
+    if (this.resetTimerId) {
+      clearTimeout(this.resetTimerId);
+      this.resetTimerId = null;
+    }
+
+    return true;
+  }
+
+  isVideoInfoRelevant(videoInfo) {
+    if (!videoInfo) return false;
+    if (!this.activeLessonChangedAt) return true;
+    return videoInfo.timestamp >= this.activeLessonChangedAt - 1000;
+  }
+
+  hasCurrentVideoInfo() {
+    if (!this.isVideoInfoRelevant(this.videoInfo)) {
+      this.videoInfo = null;
+      return false;
+    }
+    return true;
+  }
+
+  applyVideoInfo(videoInfo) {
+    if (!this.isVideoInfoRelevant(videoInfo)) return false;
+    this.videoInfo = videoInfo;
+    return true;
+  }
+
+  requestLatestVideoInfo() {
+    safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response, error) => {
+      if (error) return;
+      if (response && response.videoInfo && this.applyVideoInfo(response.videoInfo) && this.enabled) {
+        this.checkAndShow();
+      }
+    });
   }
 
   normalizeTitleText(text) {
@@ -1686,7 +1774,7 @@ class ZenstudyToolDownloader {
 
     this.activeConversionRequestId = null;
 
-    if (this.videoInfo) {
+    if (this.hasCurrentVideoInfo()) {
       this.stopWaitingPoll();
       this.setButtonState('ready', DOWNLOAD_BUTTON_TEXT.ready);
       btn.disabled = false;
@@ -1706,20 +1794,13 @@ class ZenstudyToolDownloader {
         return;
       }
 
-      if (this.videoInfo) {
+      if (this.hasCurrentVideoInfo()) {
         this.stopWaitingPoll();
         this.setReadyState();
         return;
       }
 
-      safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response, error) => {
-        if (error) return;
-        if (response && response.videoInfo) {
-          this.videoInfo = response.videoInfo;
-          this.stopWaitingPoll();
-          this.setReadyState();
-        }
-      });
+      this.requestLatestVideoInfo();
     }, 1200);
   }
 
@@ -1808,9 +1889,12 @@ class ZenstudyToolDownloader {
 
   checkAndShow() {
     if (!this.isModalOpen()) {
+      this.syncLessonContext();
       this.removeButton();
       return;
     }
+
+    const lessonChanged = this.syncLessonContext();
 
     const modalContent = document.querySelector('.ReactModal__Content');
     if (!modalContent) return;
@@ -1818,7 +1902,9 @@ class ZenstudyToolDownloader {
     let btn = this.getDownloadButton();
     
     if (btn) {
-      if (this.videoInfo && btn.dataset.state === 'waiting') this.setReadyState();
+      if (lessonChanged || (!this.hasCurrentVideoInfo() && btn.dataset.state !== 'waiting') || (this.hasCurrentVideoInfo() && btn.dataset.state === 'waiting')) {
+        this.setReadyState();
+      }
       return;
     }
 
@@ -1837,38 +1923,62 @@ class ZenstudyToolDownloader {
     this.setReadyState();
   }
 
-  async handleDownloadClick() {
-    const btn = this.getDownloadButton();
-    if (!btn || btn.disabled || !this.videoInfo) return;
+  async startDownload() {
+    if (this.isDownloading || !this.hasCurrentVideoInfo()) return false;
 
+    const btn = this.getDownloadButton();
+    if (btn && btn.disabled) return false;
+
+    const requestedVideoInfo = this.videoInfo;
+    const downloadSequence = ++this.nextDownloadSequence;
+    this.activeDownloadSequence = downloadSequence;
+    this.isDownloading = true;
     this.title = await this.resolveTitle();
     this.sectionTitle = this.getSectionTitle();
     this.activeConversionRequestId = null;
+
+    if (this.activeDownloadSequence !== downloadSequence) {
+      return false;
+    }
+
     this.setBusyState(DOWNLOAD_BUTTON_TEXT.preparing);
 
     safeRuntimeSendMessage({
       type: 'ZST_DOWNLOAD_VIDEO',
-      videoInfo: this.videoInfo,
+      videoInfo: requestedVideoInfo,
       title: this.title,
       sectionTitle: this.sectionTitle,
     }, (response, error) => {
+      const isActiveDownload = this.activeDownloadSequence === downloadSequence;
+
+      const handleFailure = (message) => {
+        if (isActiveDownload) {
+          this.isDownloading = false;
+          this.activeDownloadSequence = 0;
+          this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+        }
+
+        alert('ダウンロードに失敗しました: ' + message);
+      };
+
       if (error) {
-        this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
-        alert('ダウンロードに失敗しました: ' + (error.message || '不明なエラー'));
+        handleFailure(error.message || '不明なエラー');
         return;
       }
 
       if (!response || !response.success) {
-        this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
-        alert('ダウンロードに失敗しました: ' + (response?.message || '不明なエラー'));
+        handleFailure(response?.message || '不明なエラー');
         return;
       }
 
-      // MP4は変換進捗メッセージが来ないため、レスポンス時点で完了扱いにする
-      if (this.videoInfo.type === 'mp4') {
-        this.setResultState('success', DOWNLOAD_BUTTON_TEXT.started);
-      }
+      if (!isActiveDownload) return;
     });
+
+    return true;
+  }
+
+  handleDownloadClick() {
+    void this.startDownload();
   }
 
   removeButton() {
@@ -1886,13 +1996,13 @@ class ZenstudyToolDownloader {
   }
 
   updateProgress(msg) {
-    if (!this.getDownloadButton()) return;
+    if (!this.getDownloadButton() || !this.isDownloading) return;
 
     if (msg && msg.requestId) {
       if (this.activeConversionRequestId && this.activeConversionRequestId !== msg.requestId) {
         return;
       }
-      if (!this.activeConversionRequestId && (msg.phase === 'init' || msg.phase === 'download')) {
+      if (!this.activeConversionRequestId && (msg.phase === 'init' || msg.phase === 'download' || msg.phase === 'save')) {
         this.activeConversionRequestId = msg.requestId;
       }
     }
@@ -1904,11 +2014,24 @@ class ZenstudyToolDownloader {
         ? Math.floor((msg.current / msg.total) * 100)
         : 0;
       this.setBusyState(`${DOWNLOAD_BUTTON_TEXT.downloading} ${percentage}%`);
+    } else if (msg.phase === 'save') {
+      if (msg.total > 0) {
+        const percentage = Math.floor((msg.current / msg.total) * 100);
+        this.setBusyState(`${DOWNLOAD_BUTTON_TEXT.saving} ${percentage}%`);
+      } else if (msg.current > 0) {
+        this.setBusyState(`${DOWNLOAD_BUTTON_TEXT.saving} ${formatByteSize(msg.current)}`);
+      } else {
+        this.setBusyState(DOWNLOAD_BUTTON_TEXT.saving);
+      }
     } else if (msg.phase === 'done') {
       this.setResultState('success', DOWNLOAD_BUTTON_TEXT.success);
+      this.isDownloading = false;
+      this.activeDownloadSequence = 0;
       this.activeConversionRequestId = null;
     } else if (msg.phase === 'error') {
       this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+      this.isDownloading = false;
+      this.activeDownloadSequence = 0;
       this.activeConversionRequestId = null;
     }
   }
