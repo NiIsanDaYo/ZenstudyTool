@@ -174,6 +174,98 @@ const sumTimeResults = (results) => {
   return sums;
 };
 
+let didWarnExtensionContextInvalidated = false;
+
+const isExtensionContextInvalidatedError = (value) => {
+  const message = typeof value === "string" ? value : value?.message || "";
+  return /Extension context invalidated/i.test(message);
+};
+
+const reportExtensionContextInvalidated = (error) => {
+  if (didWarnExtensionContextInvalidated) return;
+  didWarnExtensionContextInvalidated = true;
+  console.warn(
+    "[ZenstudyTool] Extension context invalidated. Reload the page after reloading or updating the extension.",
+    error
+  );
+};
+
+const safeStorageGet = (defaults, callback) => {
+  try {
+    chrome.storage.local.get(defaults, (result) => {
+      const lastError = chrome.runtime?.lastError || null;
+      if (lastError) {
+        if (isExtensionContextInvalidatedError(lastError)) {
+          reportExtensionContextInvalidated(lastError);
+        } else {
+          console.warn("[ZenstudyTool] chrome.storage.local.get failed", lastError);
+        }
+        callback(defaults);
+        return;
+      }
+
+      callback(result);
+    });
+  } catch (error) {
+    if (isExtensionContextInvalidatedError(error)) {
+      reportExtensionContextInvalidated(error);
+      callback(defaults);
+      return;
+    }
+
+    throw error;
+  }
+};
+
+const addSafeStorageChangeListener = (listener) => {
+  try {
+    chrome.storage.onChanged.addListener(listener);
+  } catch (error) {
+    if (isExtensionContextInvalidatedError(error)) {
+      reportExtensionContextInvalidated(error);
+      return;
+    }
+
+    throw error;
+  }
+};
+
+const addSafeRuntimeMessageListener = (listener) => {
+  try {
+    chrome.runtime.onMessage.addListener(listener);
+  } catch (error) {
+    if (isExtensionContextInvalidatedError(error)) {
+      reportExtensionContextInvalidated(error);
+      return;
+    }
+
+    throw error;
+  }
+};
+
+const safeRuntimeSendMessage = (message, callback = () => {}) => {
+  try {
+    chrome.runtime.sendMessage(message, (response) => {
+      const lastError = chrome.runtime?.lastError || null;
+      if (lastError && isExtensionContextInvalidatedError(lastError)) {
+        reportExtensionContextInvalidated(lastError);
+        callback(undefined, lastError);
+        return;
+      }
+
+      callback(response, lastError);
+    });
+  } catch (error) {
+    if (isExtensionContextInvalidatedError(error)) {
+      reportExtensionContextInvalidated(error);
+      callback(undefined, error);
+      return;
+    }
+
+    throw error;
+  }
+};
+
 // ============================================================
 // 必修フィルタ自動有効化
 // ============================================================
@@ -186,7 +278,7 @@ class ZenstudyToolAutoFilter {
     this.intervalId = null;
 
     // ストレージから初期状態を読み込んで開始/停止
-    chrome.storage.local.get(
+    safeStorageGet(
       { [STORAGE_KEYS.forceEssentialEnabled]: true },
       (result) => {
         if (result[STORAGE_KEYS.forceEssentialEnabled]) this.start();
@@ -194,7 +286,7 @@ class ZenstudyToolAutoFilter {
     );
 
     // ストレージ変更を監視してリアルタイムに切り替え
-    chrome.storage.onChanged.addListener((changes, area) => {
+    addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       const change = changes[STORAGE_KEYS.forceEssentialEnabled];
       if (change === undefined) return;
@@ -555,7 +647,7 @@ class ZenstudyToolUI {
     this.showDailyTarget = true;
 
     // ストレージから初期状態を読み込み
-    chrome.storage.local.get(
+    safeStorageGet(
       { [STORAGE_KEYS.showTotalTime]: true, [STORAGE_KEYS.showDailyTarget]: true },
       (result) => {
         this.showTime = result[STORAGE_KEYS.showTotalTime];
@@ -565,7 +657,7 @@ class ZenstudyToolUI {
     );
 
     // ストレージ変更をリアルタイムに反映
-    chrome.storage.onChanged.addListener((changes, area) => {
+    addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       let shouldUpdate = false;
       if (changes[STORAGE_KEYS.showTotalTime] !== undefined) {
@@ -750,7 +842,7 @@ class ZenstudyToolAutoSkip {
     this.lastClickedName = "";
 
     // ストレージから初期状態を読み込み
-    chrome.storage.local.get(
+    safeStorageGet(
       { [STORAGE_KEYS.autoSkipEnabled]: false },
       (result) => {
         this.enabled = result[STORAGE_KEYS.autoSkipEnabled];
@@ -759,7 +851,7 @@ class ZenstudyToolAutoSkip {
     );
 
     // ストレージ変更をリアルタイムに反映
-    chrome.storage.onChanged.addListener((changes, area) => {
+    addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       const change = changes[STORAGE_KEYS.autoSkipEnabled];
       if (change === undefined) return;
@@ -851,14 +943,14 @@ class ZenstudyToolAlwaysFocus {
     this.enabled = false;
     this.playObserver = null;
 
-    chrome.storage.local.get(
+    safeStorageGet(
       { [STORAGE_KEYS.alwaysFocusEnabled]: true },
       (result) => {
         this.setEnabled(Boolean(result[STORAGE_KEYS.alwaysFocusEnabled]));
       }
     );
 
-    chrome.storage.onChanged.addListener((changes, area) => {
+    addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       const change = changes[STORAGE_KEYS.alwaysFocusEnabled];
       if (change === undefined) return;
@@ -930,13 +1022,13 @@ class ZenstudyToolCopyText {
     this.observer = createDebouncedObserver(() => this.checkIframe(), 500);
     
     // ストレージから初期状態を読み込み
-    chrome.storage.local.get({ [STORAGE_KEYS.copyTextEnabled]: true }, (result) => {
+    safeStorageGet({ [STORAGE_KEYS.copyTextEnabled]: true }, (result) => {
       this.enabled = result[STORAGE_KEYS.copyTextEnabled];
       this.checkIframe();
     });
 
     // ストレージ変更をリアルタイムに反映
-    chrome.storage.onChanged.addListener((changes, area) => {
+    addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       const change = changes[STORAGE_KEYS.copyTextEnabled];
       if (change !== undefined) {
@@ -1319,17 +1411,22 @@ class ZenstudyToolDownloader {
     this.videoInfo = null;
     this.title = '';
     this.sectionTitle = '';
+    this.lastSelectedTitle = '';
     this.btn = null;
     this.resetTimerId = null;
     this.waitingPollTimerId = null;
     this.activeConversionRequestId = null;
+    this.chapterDataCache = new Map();
 
-    chrome.storage.local.get({ [STORAGE_KEYS.downloadEnabled]: true }, (result) => {
+    this.handlePotentialLessonSelection = this.handlePotentialLessonSelection.bind(this);
+    document.addEventListener('click', this.handlePotentialLessonSelection, true);
+
+    safeStorageGet({ [STORAGE_KEYS.downloadEnabled]: true }, (result) => {
       this.enabled = result[STORAGE_KEYS.downloadEnabled];
       if (this.enabled) this.checkAndShow();
     });
 
-    chrome.storage.onChanged.addListener((changes, area) => {
+    addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       const change = changes[STORAGE_KEYS.downloadEnabled];
       if (change !== undefined) {
@@ -1342,7 +1439,7 @@ class ZenstudyToolDownloader {
       }
     });
 
-    chrome.runtime.onMessage.addListener((message) => {
+    addSafeRuntimeMessageListener((message) => {
       if (message.type === 'ZST_VIDEO_URL_DETECTED') {
         this.videoInfo = message.videoInfo;
         if (this.enabled) this.checkAndShow();
@@ -1356,7 +1453,7 @@ class ZenstudyToolDownloader {
     }, 150);
 
     // 初期状態としてBackgroundから動画情報を取得
-    chrome.runtime.sendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response) => {
+    safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response) => {
       if (response && response.videoInfo) {
         this.videoInfo = response.videoInfo;
         if (this.enabled) this.checkAndShow();
@@ -1369,6 +1466,211 @@ class ZenstudyToolDownloader {
     const existingBtn = document.getElementById(ELEMENT_IDS.downloadButton);
     this.btn = existingBtn || null;
     return this.btn;
+  }
+
+  normalizeTitleText(text) {
+    if (!text) return '';
+
+    return text
+      .replace(/\s+/g, ' ')
+      .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*\/\s*\d{1,2}:\d{2}(?::\d{2})?[\s\S]*$/, '')
+      .replace(/\s+-\s+ZEN Study$/, '')
+      .replace(/\s+\|\s+N予備校$/, '')
+      .replace(/\s+-\s+N予備校$/, '')
+      .trim();
+  }
+
+  isUsableLessonTitle(text) {
+    const normalized = this.normalizeTitleText(text);
+    if (!normalized) return false;
+    if (normalized === '教材' || normalized === '動画' || normalized === 'ZEN Study') {
+      return false;
+    }
+
+    const sectionTitle = this.normalizeTitleText(this.getSectionTitle());
+    if (sectionTitle && normalized === sectionTitle) {
+      return false;
+    }
+
+    return true;
+  }
+
+  pickTitleFromNode(node) {
+    if (!node) return '';
+
+    const selectors = [
+      '[font-size="1.5rem"]',
+      '[font-size="1.6rem"]',
+      'h1 span',
+      'h1',
+      'h2 span',
+      'h2',
+      'h3 span',
+      'h3',
+      'h4 > span',
+      'h4',
+    ];
+
+    for (const selector of selectors) {
+      const el = node.querySelector(selector);
+      if (!el) continue;
+
+      const text = this.normalizeTitleText(el.textContent || '');
+      if (this.isUsableLessonTitle(text)) return text;
+    }
+
+    return '';
+  }
+
+  handlePotentialLessonSelection(event) {
+    if (!(event.target instanceof Element)) return;
+
+    const listItem = event.target.closest('ul[aria-label="必修教材リスト"] li');
+    if (!listItem) return;
+    if (!listItem.querySelector('svg[type="movie-rounded"]')) return;
+
+    const title = this.pickTitleFromNode(listItem);
+    if (!title) return;
+
+    this.lastSelectedTitle = title;
+  }
+
+  getModalIframe() {
+    return document.querySelector('.ReactModal__Content iframe[src*="/movies/"]');
+  }
+
+  getIframeDocument(iframe) {
+    if (!iframe) return null;
+
+    try {
+      return iframe.contentDocument || iframe.contentWindow?.document || null;
+    } catch (err) {
+      console.warn('[ZenstudyTool] iframe document access failed', err);
+      return null;
+    }
+  }
+
+  extractTitleFromDocument(doc) {
+    if (!doc) return '';
+
+    const fromBody = this.pickTitleFromNode(doc.body || doc);
+    if (fromBody) return fromBody;
+
+    const metaCandidates = [
+      doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || '',
+      doc.querySelector('meta[name="twitter:title"]')?.getAttribute('content') || '',
+      doc.title || '',
+    ];
+
+    for (const candidate of metaCandidates) {
+      const title = this.normalizeTitleText(candidate);
+      if (this.isUsableLessonTitle(title)) return title;
+    }
+
+    return '';
+  }
+
+  getMovieContextFromIframe() {
+    const iframe = this.getModalIframe();
+    const src = iframe?.getAttribute('src') || iframe?.src || '';
+    if (!src) return null;
+
+    try {
+      const url = new URL(src, window.location.origin);
+      const match = url.pathname.match(/^\/(?:contents\/)?courses\/(\d+)\/chapters\/(\d+)\/movies\/(\d+)/);
+      if (!match) return null;
+
+      return {
+        courseId: match[1],
+        chapterId: match[2],
+        movieId: match[3],
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  fetchChapterData(courseId, chapterId) {
+    const cacheKey = `${courseId}:${chapterId}`;
+    if (this.chapterDataCache.has(cacheKey)) {
+      return this.chapterDataCache.get(cacheKey);
+    }
+
+    const promise = fetch(`${API_BASE_URL}/v2/material/courses/${courseId}/chapters/${chapterId}`, {
+      credentials: 'include',
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .catch((err) => {
+        console.warn('[ZenstudyTool] Chapter data fetch failed', err);
+        return null;
+      });
+
+    this.chapterDataCache.set(cacheKey, promise);
+    return promise;
+  }
+
+  findMovieTitleInValue(value, movieId) {
+    const seen = new WeakSet();
+    const queue = [value];
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current || typeof current !== 'object') continue;
+
+      if (Array.isArray(current)) {
+        for (const item of current) queue.push(item);
+        continue;
+      }
+
+      if (seen.has(current)) continue;
+      seen.add(current);
+
+      const idCandidates = [current.id, current.movie_id, current.material_id, current.resource_id]
+        .filter((candidate) => candidate !== undefined && candidate !== null)
+        .map((candidate) => String(candidate));
+      const urlCandidates = [current.url, current.href, current.path]
+        .filter((candidate) => typeof candidate === 'string');
+
+      const matchesMovie = idCandidates.includes(String(movieId))
+        || urlCandidates.some((candidate) => candidate.includes(`/movies/${movieId}`));
+
+      if (matchesMovie) {
+        const title = this.normalizeTitleText(
+          current.name
+          || current.title
+          || current.display_name
+          || current.resource_name
+          || current.label
+          || ''
+        );
+        if (this.isUsableLessonTitle(title)) return title;
+      }
+
+      for (const child of Object.values(current)) {
+        if (child && typeof child === 'object') queue.push(child);
+      }
+    }
+
+    return '';
+  }
+
+  async resolveTitle() {
+    if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
+      return this.normalizeTitleText(this.lastSelectedTitle);
+    }
+
+    const iframeDoc = this.getIframeDocument(this.getModalIframe());
+    const iframeTitle = this.extractTitleFromDocument(iframeDoc);
+    if (iframeTitle) return iframeTitle;
+
+    const movieContext = this.getMovieContextFromIframe();
+    if (movieContext) {
+      const chapterData = await this.fetchChapterData(movieContext.courseId, movieContext.chapterId);
+      const apiTitle = this.findMovieTitleInValue(chapterData?.chapter || chapterData, movieContext.movieId);
+      if (apiTitle) return apiTitle;
+    }
+
+    return this.getTitle();
   }
 
   setButtonState(state, text) {
@@ -1410,8 +1712,8 @@ class ZenstudyToolDownloader {
         return;
       }
 
-      chrome.runtime.sendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response) => {
-        if (chrome.runtime.lastError) return;
+      safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response, error) => {
+        if (error) return;
         if (response && response.videoInfo) {
           this.videoInfo = response.videoInfo;
           this.stopWaitingPoll();
@@ -1452,59 +1754,36 @@ class ZenstudyToolDownloader {
   }
 
   getTitle() {
-    const pickTitleFromNode = (node) => {
-      if (!node) return '';
+    if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
+      return this.normalizeTitleText(this.lastSelectedTitle);
+    }
 
-      const selectors = [
-        '[font-size="1.5rem"]',
-        '[font-size="1.6rem"]',
-        'h4 > span',
-        'h4',
-        'h3',
-      ];
-
-      for (const selector of selectors) {
-        const el = node.querySelector(selector);
-        if (!el) continue;
-        let text = (el.textContent || '').trim();
-        if (!text) continue;
-
-        // h4 の場合に混ざる時間表示を除去
-        text = text.replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*\/\s*\d{1,2}:\d{2}(?::\d{2})?[\s\S]*$/, '').trim();
-        if (text) return text;
-      }
-
-      return '';
-    };
+    const iframeTitle = this.extractTitleFromDocument(this.getIframeDocument(this.getModalIframe()));
+    if (iframeTitle) return iframeTitle;
 
     const list = document.querySelector('ul[aria-label="必修教材リスト"]');
     if (list) {
       const activeItem = Array.from(list.children).find(li => {
         const row = li.querySelector('div > div');
-        if (!row) return false;
-        if (row.getAttribute('aria-current') === 'true' || li.getAttribute('aria-current') === 'true') return true;
-        const circles = row.querySelectorAll('circle');
-        for (const circle of circles) {
-          const stroke = circle.getAttribute('stroke');
-          if (stroke && stroke !== '#e9e9e9' && stroke !== 'none' && stroke !== 'gray') return true;
-        }
-        return false;
+        return !!row && (
+          row.getAttribute('aria-current') === 'true'
+          || li.getAttribute('aria-current') === 'true'
+        );
       });
       if (activeItem) {
-        const row = activeItem.querySelector('div > div');
-        const listTitle = pickTitleFromNode(row);
+        const listTitle = this.pickTitleFromNode(activeItem);
         if (listTitle) return listTitle;
       }
     }
 
     const breadcrumbTitle = document.querySelector('nav[aria-label="パンくずリスト"] h2 span');
     if (breadcrumbTitle && breadcrumbTitle.textContent.trim()) {
-      return breadcrumbTitle.textContent.trim();
+      return this.normalizeTitleText(breadcrumbTitle.textContent);
     }
 
     const titleEl = document.querySelector('h1, [class*="title"]');
-    if (titleEl) return titleEl.textContent.trim();
-    return document.title.replace(' | N予備校', '').replace(' - ZEN Study', '').trim();
+    if (titleEl) return this.normalizeTitleText(titleEl.textContent);
+    return this.normalizeTitleText(document.title);
   }
 
   getSectionTitle() {
@@ -1558,24 +1837,24 @@ class ZenstudyToolDownloader {
     this.setReadyState();
   }
 
-  handleDownloadClick() {
+  async handleDownloadClick() {
     const btn = this.getDownloadButton();
     if (!btn || btn.disabled || !this.videoInfo) return;
 
-    this.title = this.getTitle();
+    this.title = await this.resolveTitle();
     this.sectionTitle = this.getSectionTitle();
     this.activeConversionRequestId = null;
     this.setBusyState(DOWNLOAD_BUTTON_TEXT.preparing);
 
-    chrome.runtime.sendMessage({
+    safeRuntimeSendMessage({
       type: 'ZST_DOWNLOAD_VIDEO',
       videoInfo: this.videoInfo,
       title: this.title,
       sectionTitle: this.sectionTitle,
-    }, (response) => {
-      if (chrome.runtime.lastError) {
+    }, (response, error) => {
+      if (error) {
         this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
-        alert('ダウンロードに失敗しました: ' + chrome.runtime.lastError.message);
+        alert('ダウンロードに失敗しました: ' + (error.message || '不明なエラー'));
         return;
       }
 
@@ -1594,6 +1873,7 @@ class ZenstudyToolDownloader {
 
   removeButton() {
     this.stopWaitingPoll();
+    this.lastSelectedTitle = '';
 
     if (this.resetTimerId) {
       clearTimeout(this.resetTimerId);
@@ -1638,10 +1918,9 @@ class ZenstudyToolDownloader {
 // エントリーポイント
 // ============================================================
 
-// 全てのフレームで動作させる（iframe内の動画タグに対応するため）
 const alwaysFocus = new ZenstudyToolAlwaysFocus();
 
-// iframe内ではUIの追加や自動スキップは実行しない
+// iframe 内では UI の追加や自動スキップは実行しない
 if (window.top === window.self) {
   const autoFilter = new ZenstudyToolAutoFilter();
   const timeLogic = new ZenstudyToolTimeLogic();
