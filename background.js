@@ -11,7 +11,103 @@
 const tabVideoUrls = new Map();
 const CONVERSION_TIMEOUT_MS = 5 * 60 * 1000;
 const DOWNLOAD_PROGRESS_THROTTLE_MS = 250;
+const GEMINI_REQUEST_TIMEOUT_MS = 30 * 1000;
+const GEMINI_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
+const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_MODEL_MODES = Object.freeze({
+  auto: 'auto',
+  manual: 'manual',
+});
+const GEMINI_PROOFREAD_FALLBACK_MODELS = Object.freeze([
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite-preview',
+  'gemma-4-31b',
+  'gemma-4-26b-a4b',
+  'gemma-3-27b',
+  'gemma-3-12b',
+  'gemma-3-4b',
+  'gemma-3-2b',
+  'gemma-3-1b',
+]);
+const DEFAULT_GEMINI_PROOFREAD_MODEL = GEMINI_PROOFREAD_FALLBACK_MODELS[0];
+const PROOFREAD_SYSTEM_INSTRUCTION = 'You are a proofreading engine for student submissions. Only rewrite the student text itself. Never add explanations, labels, greetings, bullet points, quotations, or any extra text that is not meant to be submitted. Preserve the original meaning and language, and if the text is already acceptable, return it unchanged.';
+const PROOFREAD_RESPONSE_JSON_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['correctedText'],
+  properties: {
+    correctedText: {
+      type: 'string',
+      description: 'The corrected submission text only. No headings, notes, explanations, labels, or quotation marks unless the submission itself requires them.',
+    },
+  },
+  propertyOrdering: ['correctedText'],
+});
+const GEMINI_PROOFREAD_MODEL_CONFIGS = Object.freeze({
+  'gemini-3-flash-preview': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: true,
+  },
+  'gemini-3.1-flash-lite-preview': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: false,
+    preserveDefaultTemperature: true,
+  },
+  'gemini-2.5-flash': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemini-2.5-flash-lite': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-4-31b': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-4-26b-a4b': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-3-27b': {
+    supportsSystemInstruction: false,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-3-12b': {
+    supportsSystemInstruction: false,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-3-4b': {
+    supportsSystemInstruction: false,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-3-2b': {
+    supportsSystemInstruction: false,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+  'gemma-3-1b': {
+    supportsSystemInstruction: false,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: false,
+  },
+});
 const trackedDownloads = new Map();
+const geminiGenerateContentModelsCache = {
+  apiKey: '',
+  fetchedAt: 0,
+  models: [],
+};
 
 function createRequestId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
@@ -76,6 +172,640 @@ function sendTrackedDownloadProgress(tracked, force = false) {
     requestId: tracked.requestId,
     outputType: tracked.outputType,
   }, tracked.sourceTabId);
+}
+
+function getLocalStorage(defaults) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(defaults, (result) => {
+      const lastError = chrome.runtime?.lastError || null;
+      if (lastError) {
+        reject(new Error(lastError.message || 'ストレージの読み込みに失敗しました'));
+        return;
+      }
+
+      resolve(result);
+    });
+  });
+}
+
+function createProofreadError(message, code, extras = {}) {
+  const error = new Error(message);
+  error.code = code;
+  Object.assign(error, extras);
+  return error;
+}
+
+function normalizeProofreadModelMode(value) {
+  return value === GEMINI_MODEL_MODES.manual ? GEMINI_MODEL_MODES.manual : GEMINI_MODEL_MODES.auto;
+}
+
+function normalizeProofreadModelName(value) {
+  return GEMINI_PROOFREAD_FALLBACK_MODELS.includes(value)
+    ? value
+    : DEFAULT_GEMINI_PROOFREAD_MODEL;
+}
+
+function getProofreadModelAliasCandidates(modelName) {
+  const normalizedModelName = normalizeProofreadModelName(modelName);
+  const candidates = [];
+
+  if (normalizedModelName.startsWith('gemma-')) {
+    candidates.push(`${normalizedModelName}-it`);
+  }
+
+  candidates.push(normalizedModelName);
+  return [...new Set(candidates)];
+}
+
+function getProofreadModelLookupKey(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function getModelIdFromResourceName(resourceName) {
+  return typeof resourceName === 'string' ? resourceName.replace(/^models\//i, '') : '';
+}
+
+function doesApiModelMatchCandidate(apiModel, candidateName) {
+  const candidateKey = getProofreadModelLookupKey(candidateName);
+  if (!candidateKey) return false;
+
+  const lookupKeys = [
+    getProofreadModelLookupKey(apiModel?.baseModelId),
+    getProofreadModelLookupKey(getModelIdFromResourceName(apiModel?.name)),
+  ].filter(Boolean);
+
+  return lookupKeys.some((lookupKey) => lookupKey === candidateKey || lookupKey.startsWith(`${candidateKey}-`));
+}
+
+function getApiModelRequestName(apiModel) {
+  if (typeof apiModel?.baseModelId === 'string' && apiModel.baseModelId.trim()) {
+    return apiModel.baseModelId.trim();
+  }
+
+  return getModelIdFromResourceName(apiModel?.name);
+}
+
+async function listGenerateContentModels(apiKey) {
+  const now = Date.now();
+  if (
+    geminiGenerateContentModelsCache.apiKey === apiKey
+    && (now - geminiGenerateContentModelsCache.fetchedAt) < GEMINI_MODELS_CACHE_TTL_MS
+    && Array.isArray(geminiGenerateContentModelsCache.models)
+  ) {
+    return geminiGenerateContentModelsCache.models;
+  }
+
+  const models = [];
+  let pageToken = '';
+
+  do {
+    const url = new URL(`${GEMINI_API_BASE_URL}/models`);
+    url.searchParams.set('key', apiKey);
+    url.searchParams.set('pageSize', '1000');
+    if (pageToken) {
+      url.searchParams.set('pageToken', pageToken);
+    }
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+    });
+    const responseJson = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const apiMessage = responseJson?.error?.message || `Gemini models.list error (${response.status})`;
+      throw createProofreadError(apiMessage, `HTTP_${response.status}`, {
+        status: response.status,
+      });
+    }
+
+    const pageModels = Array.isArray(responseJson?.models) ? responseJson.models : [];
+    models.push(
+      ...pageModels.filter((model) => Array.isArray(model?.supportedGenerationMethods) && model.supportedGenerationMethods.includes('generateContent'))
+    );
+    pageToken = typeof responseJson?.nextPageToken === 'string' ? responseJson.nextPageToken : '';
+  } while (pageToken);
+
+  geminiGenerateContentModelsCache.apiKey = apiKey;
+  geminiGenerateContentModelsCache.fetchedAt = now;
+  geminiGenerateContentModelsCache.models = models;
+  return models;
+}
+
+async function resolveProofreadRequestModelName(apiKey, modelName) {
+  const aliasCandidates = getProofreadModelAliasCandidates(modelName);
+
+  try {
+    const availableModels = await listGenerateContentModels(apiKey);
+    for (const candidateName of aliasCandidates) {
+      const matchedModel = availableModels.find((apiModel) => doesApiModelMatchCandidate(apiModel, candidateName));
+      const requestModelName = getApiModelRequestName(matchedModel);
+      if (requestModelName) {
+        return requestModelName;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.warn('[ZenstudyTool BG] Failed to list Gemini API models. Falling back to alias candidate.', {
+      modelName,
+      error: error.message,
+    });
+    return aliasCandidates[0] || null;
+  }
+}
+
+function getProofreadModelConfig(modelName) {
+  return GEMINI_PROOFREAD_MODEL_CONFIGS[modelName] || {
+    supportsSystemInstruction: false,
+    supportsStructuredOutput: false,
+    preserveDefaultTemperature: false,
+  };
+}
+
+function getProofreadModelCandidates(mode, selectedModel) {
+  if (mode === GEMINI_MODEL_MODES.manual) {
+    return [normalizeProofreadModelName(selectedModel)];
+  }
+
+  return [...GEMINI_PROOFREAD_FALLBACK_MODELS];
+}
+
+function getProofreadModelConfigKey(modelName) {
+  return typeof modelName === 'string' ? modelName.trim().replace(/-it$/i, '') : '';
+}
+
+function buildProofreadPrompt(originalText, promptContext, strategy) {
+  const lines = [
+    '以下は提出前の学生の文章です。文章校正だけを行ってください。',
+    '厳守事項:',
+    '- 誤字、脱字、文法、句読点、不自然な言い回しだけを必要最小限で直すこと。',
+    '- 元の意味、主張、文量、改行、言語をできるだけ維持すること。',
+    '- 設問に対する新しい内容、補足、例、説明、見出し、箇条書き、前置き、後書き、引用符を追加しないこと。',
+    '- 文章が短すぎたり不完全でも、勝手に内容を補完せず、校正だけを行うこと。',
+    '- 返す内容は実際に提出欄へそのまま入れられる文章のみとすること。',
+  ];
+
+  if (strategy === 'plain_text') {
+    lines.push('- 出力は必ず <final>校正後の本文</final> の形式 1 個だけにすること。<final> の外には何も書かないこと。');
+    lines.push('- JSON、コードブロック、見出し、注釈、ラベル、引用符だけの装飾、思考過程、自己確認、箇条書きを書かないこと。');
+  } else {
+    lines.push('- correctedText に入る本文以外の情報を混ぜないこと。');
+  }
+
+  lines.push(
+    '',
+    '設問コンテキスト:',
+    promptContext || 'なし',
+    '',
+    '提出文:',
+    originalText,
+  );
+
+  return lines.join('\n');
+}
+
+function extractGeminiText(responseJson) {
+  const candidate = responseJson?.candidates?.[0] || null;
+  if (!candidate) {
+    const blockReason = responseJson?.promptFeedback?.blockReason || '';
+    throw createProofreadError(
+      blockReason ? `Geminiによりブロックされました: ${blockReason}` : 'Geminiの応答が空でした',
+      blockReason || 'EMPTY_RESPONSE'
+    );
+  }
+
+  if (candidate.finishReason === 'MAX_TOKENS') {
+    throw createProofreadError('Geminiの応答が途中で打ち切られました', 'MAX_TOKENS');
+  }
+
+  if (['SAFETY', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'RECITATION', 'MALFORMED_RESPONSE'].includes(candidate.finishReason)) {
+    throw createProofreadError(
+      `Geminiの応答を利用できません: ${candidate.finishReason}`,
+      candidate.finishReason
+    );
+  }
+
+  const parts = Array.isArray(candidate.content?.parts) ? candidate.content.parts : [];
+  const text = parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+    .join('')
+    .trim();
+
+  if (!text) {
+    throw createProofreadError('Geminiの応答本文を取得できませんでした', 'EMPTY_RESPONSE_TEXT');
+  }
+
+  return text;
+}
+
+function unwrapCodeFence(text) {
+  const trimmed = (text || '').trim();
+  const match = trimmed.match(/^```(?:[A-Za-z0-9_-]+)?\s*([\s\S]*?)\s*```$/);
+  return match ? match[1].trim() : trimmed;
+}
+
+function stripProofreadControlMarkup(text) {
+  return String(text || '')
+    .replace(/<\|think\|>/gi, '')
+    .replace(/<\|channel\|>thought\s*[\s\S]*?<channel\|>/gi, '')
+    .replace(/<\|channel\|>analysis\s*[\s\S]*?<channel\|>/gi, '')
+    .trim();
+}
+
+function extractTaggedProofreadText(text) {
+  const match = String(text || '').match(/<final>\s*([\s\S]*?)\s*<\/final>/i);
+  return match?.[1]?.trim() || '';
+}
+
+function isProofreadMetaLine(line) {
+  const trimmedLine = String(line || '').trim();
+  if (!trimmedLine) return false;
+
+  if (/^[*\-]\s+/.test(trimmedLine)) return true;
+  if (/^\d+\.\s+/.test(trimmedLine)) return true;
+  if (/^["'“].+["'”]\s*->\s*["'“].+["'”]$/.test(trimmedLine)) return true;
+  if (/^(Role|Task|Constraints|Context|Question|Student'?s text|Corrected|Punctuation|Wait|No extra text|Thought|Reasoning)\s*:/i.test(trimmedLine)) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractNonMetaBlockText(text) {
+  const keptLines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !isProofreadMetaLine(line));
+
+  return keptLines.join('\n').trim();
+}
+
+function hasJapaneseText(text) {
+  return /[\u3040-\u30ff\u4e00-\u9faf]/.test(String(text || ''));
+}
+
+function scoreProofreadCandidate(candidateText, originalText) {
+  const candidate = String(candidateText || '').trim();
+  const original = String(originalText || '').trim();
+  if (!candidate) return Number.NEGATIVE_INFINITY;
+
+  let score = candidate.length;
+
+  if (original) {
+    score -= Math.abs(candidate.length - original.length) * 0.35;
+    if (hasJapaneseText(candidate) === hasJapaneseText(original)) {
+      score += 18;
+    }
+  }
+
+  if (/^(Role|Task|Constraints|Context|Question|Student|Corrected)\s*:/im.test(candidate)) {
+    score -= 500;
+  }
+  if (/^[*\-]\s+/m.test(candidate)) {
+    score -= 300;
+  }
+
+  return score;
+}
+
+function removeRepeatedSentenceBlocks(text) {
+  const sentences = String(text || '')
+    .match(/[^。！？!?\n]+[。！？!?]?/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) || [];
+
+  if (sentences.length >= 2 && sentences.length % 2 === 0) {
+    const half = sentences.length / 2;
+    const firstHalf = sentences.slice(0, half).join('');
+    const secondHalf = sentences.slice(half).join('');
+    if (firstHalf && firstHalf === secondHalf) {
+      return firstHalf.trim();
+    }
+  }
+
+  return String(text || '').trim();
+}
+
+function removeRepeatedWholeText(text) {
+  const trimmedText = String(text || '').trim();
+  if (!trimmedText) return '';
+
+  const compactText = trimmedText.replace(/\s+/g, '');
+  if (compactText.length % 2 !== 0) {
+    return trimmedText;
+  }
+
+  const compactHalfLength = compactText.length / 2;
+  const compactFirstHalf = compactText.slice(0, compactHalfLength);
+  const compactSecondHalf = compactText.slice(compactHalfLength);
+  if (compactFirstHalf !== compactSecondHalf) {
+    return trimmedText;
+  }
+
+  const paragraphs = trimmedText.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  if (paragraphs.length >= 2 && paragraphs.length % 2 === 0) {
+    const half = paragraphs.length / 2;
+    const firstHalf = paragraphs.slice(0, half).join('\n\n');
+    const secondHalf = paragraphs.slice(half).join('\n\n');
+    if (firstHalf && firstHalf === secondHalf) {
+      return firstHalf.trim();
+    }
+  }
+
+  return removeRepeatedSentenceBlocks(trimmedText);
+}
+
+function sanitizePlainTextProofreadResponse(responseText, originalText) {
+  const strippedText = stripProofreadControlMarkup(unwrapCodeFence(responseText));
+  const taggedText = extractTaggedProofreadText(strippedText);
+  const preferredText = taggedText || strippedText;
+
+  const rawBlocks = preferredText
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  const candidateBlocks = rawBlocks
+    .map((block) => extractNonMetaBlockText(block))
+    .filter(Boolean);
+
+  const fallbackCandidate = extractNonMetaBlockText(preferredText) || preferredText.trim();
+  const candidates = candidateBlocks.length ? candidateBlocks : [fallbackCandidate];
+  const bestCandidate = candidates
+    .slice()
+    .sort((left, right) => scoreProofreadCandidate(right, originalText) - scoreProofreadCandidate(left, originalText))[0];
+
+  return removeRepeatedWholeText(bestCandidate);
+}
+
+function parseStructuredProofreadText(responseText) {
+  let parsed;
+
+  try {
+    parsed = JSON.parse(responseText);
+  } catch (_) {
+    throw createProofreadError('Geminiの校正結果をJSONとして解釈できませんでした', 'INVALID_JSON_RESPONSE');
+  }
+
+  const correctedText = typeof parsed?.correctedText === 'string'
+    ? parsed.correctedText.trim()
+    : '';
+
+  if (!correctedText) {
+    throw createProofreadError('Geminiの校正結果が空でした', 'EMPTY_CORRECTED_TEXT');
+  }
+
+  return correctedText;
+}
+
+function parsePlainTextProofreadText(responseText, originalText) {
+  const trimmedText = sanitizePlainTextProofreadResponse(responseText, originalText);
+  if (!trimmedText) {
+    throw createProofreadError('Geminiの校正結果が空でした', 'EMPTY_CORRECTED_TEXT');
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedText);
+    if (typeof parsed === 'string' && parsed.trim()) {
+      return parsed.trim();
+    }
+    if (typeof parsed?.correctedText === 'string' && parsed.correctedText.trim()) {
+      return parsed.correctedText.trim();
+    }
+  } catch (_) {
+    // Plain text response expected.
+  }
+
+  return trimmedText;
+}
+
+function buildProofreadRequestBody({ modelName, strategy, originalText, promptContext }) {
+  const modelConfig = getProofreadModelConfig(getProofreadModelConfigKey(modelName));
+  const generationConfig = {
+    candidateCount: 1,
+    maxOutputTokens: 2048,
+  };
+
+  if (!modelConfig.preserveDefaultTemperature) {
+    generationConfig.temperature = 0;
+  }
+
+  if (strategy === 'json_schema') {
+    generationConfig.responseMimeType = 'application/json';
+    generationConfig.responseJsonSchema = PROOFREAD_RESPONSE_JSON_SCHEMA;
+  }
+
+  const requestBody = {
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: buildProofreadPrompt(originalText, promptContext, strategy),
+          },
+        ],
+      },
+    ],
+    generationConfig,
+  };
+
+  if (modelConfig.supportsSystemInstruction) {
+    requestBody.systemInstruction = {
+      parts: [
+        {
+          text: PROOFREAD_SYSTEM_INSTRUCTION,
+        },
+      ],
+    };
+  }
+
+  return requestBody;
+}
+
+async function requestProofreadFromModel({ apiKey, modelName, strategy, originalText, promptContext }) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildProofreadRequestBody({
+          modelName,
+          strategy,
+          originalText,
+          promptContext,
+        })),
+        signal: controller.signal,
+      }
+    );
+
+    const responseJson = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const apiMessage = responseJson?.error?.message || `Gemini API error (${response.status})`;
+      throw createProofreadError(apiMessage, `HTTP_${response.status}`, {
+        status: response.status,
+        modelName,
+        strategy,
+      });
+    }
+
+    const responseText = extractGeminiText(responseJson);
+    const correctedText = strategy === 'json_schema'
+      ? parseStructuredProofreadText(responseText)
+      : parsePlainTextProofreadText(responseText, originalText);
+
+    return { correctedText, strategy };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw createProofreadError('Gemini APIの応答がタイムアウトしました', 'TIMEOUT', {
+        modelName,
+        strategy,
+      });
+    }
+
+    if (!error?.code) {
+      throw createProofreadError(error?.message || 'AI校正に失敗しました', 'REQUEST_FAILED', {
+        modelName,
+        strategy,
+      });
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function shouldRetryPlainTextStrategy(error, strategy) {
+  if (strategy !== 'json_schema') return false;
+
+  if (error?.status === 400) return true;
+
+  return ['INVALID_JSON_RESPONSE', 'EMPTY_CORRECTED_TEXT', 'MALFORMED_RESPONSE'].includes(error?.code);
+}
+
+function shouldTryNextProofreadModel(error) {
+  return !['EMPTY_TEXT', 'MISSING_API_KEY'].includes(error?.code);
+}
+
+function buildProofreadFailureMessage(mode, attempts) {
+  if (!attempts.length) return 'AI校正に失敗しました';
+
+  const lastAttempt = attempts[attempts.length - 1];
+  if (mode === GEMINI_MODEL_MODES.manual) {
+    return `${lastAttempt.modelName} でAI校正に失敗しました（${lastAttempt.message}）`;
+  }
+
+  const triedModels = attempts.map((attempt) => attempt.modelName).join(' → ');
+  return `自動モデル選択でAI校正に失敗しました（試行: ${triedModels} / 最後のエラー: ${lastAttempt.message}）`;
+}
+
+async function proofreadWithGemini({ originalText, promptContext }) {
+  const trimmedOriginalText = typeof originalText === 'string' ? originalText.trim() : '';
+  if (!trimmedOriginalText) {
+    throw createProofreadError('校正対象の文章が空です', 'EMPTY_TEXT');
+  }
+
+  const {
+    geminiApiKey = '',
+    geminiModelMode = GEMINI_MODEL_MODES.auto,
+    geminiSelectedModel = DEFAULT_GEMINI_PROOFREAD_MODEL,
+  } = await getLocalStorage({
+    geminiApiKey: '',
+    geminiModelMode: GEMINI_MODEL_MODES.auto,
+    geminiSelectedModel: DEFAULT_GEMINI_PROOFREAD_MODEL,
+  });
+  const apiKey = geminiApiKey.trim();
+  if (!apiKey) {
+    throw createProofreadError('Gemini APIキーが未設定です。ポップアップから設定してください。', 'MISSING_API_KEY');
+  }
+
+  const mode = normalizeProofreadModelMode(geminiModelMode);
+  const selectedModel = normalizeProofreadModelName(geminiSelectedModel);
+  const modelCandidates = getProofreadModelCandidates(mode, selectedModel);
+  const attempts = [];
+
+  for (const modelName of modelCandidates) {
+    const requestModelName = await resolveProofreadRequestModelName(apiKey, modelName);
+    if (!requestModelName) {
+      const message = `${modelName} に対応するGemini APIの利用可能モデルが ListModels に見つかりませんでした`;
+      attempts.push({
+        modelName,
+        message,
+      });
+
+      if (mode === GEMINI_MODEL_MODES.manual) {
+        throw createProofreadError(message, 'MODEL_NOT_AVAILABLE', { modelName });
+      }
+
+      console.warn('[ZenstudyTool BG] Skipping unresolved proofread model', {
+        modelName,
+      });
+      continue;
+    }
+
+    const modelConfig = getProofreadModelConfig(modelName);
+    const strategies = modelConfig.supportsStructuredOutput
+      ? ['json_schema', 'plain_text']
+      : ['plain_text'];
+
+    for (const strategy of strategies) {
+      try {
+        const result = await requestProofreadFromModel({
+          apiKey,
+          modelName: requestModelName,
+          strategy,
+          originalText: trimmedOriginalText,
+          promptContext,
+        });
+
+        return {
+          correctedText: result.correctedText,
+          model: modelName,
+          resolvedModel: requestModelName,
+          strategy: result.strategy,
+        };
+      } catch (error) {
+        if (shouldRetryPlainTextStrategy(error, strategy)) {
+          console.warn('[ZenstudyTool BG] Retrying proofreading with plain text mode', {
+            modelName,
+            requestModelName,
+            reason: error.message,
+          });
+          continue;
+        }
+
+        attempts.push({
+          modelName,
+          message: error.message || '不明なエラー',
+        });
+
+        console.warn('[ZenstudyTool BG] Proofread attempt failed', {
+          modelName,
+          requestModelName,
+          strategy,
+          error: error.message,
+        });
+
+        if (!shouldTryNextProofreadModel(error)) {
+          throw error;
+        }
+
+        break;
+      }
+    }
+  }
+
+  throw createProofreadError(
+    buildProofreadFailureMessage(mode, attempts),
+    'ALL_MODELS_FAILED',
+    { attempts }
+  );
 }
 
 async function trackBrowserDownload({ url, filename, sourceTabId, requestId, outputType, blobUrl = null }) {
@@ -251,6 +981,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // ダウンロードリクエスト
     handleDownload(message, sender.tab?.id).then(sendResponse);
     return true; // 非同期レスポンス
+  }
+
+  if (message.type === 'ZST_PROOFREAD_TEXT') {
+    proofreadWithGemini(message)
+      .then(({ correctedText, model, resolvedModel, strategy }) => {
+        sendResponse({ success: true, correctedText, model, resolvedModel, strategy });
+      })
+      .catch((error) => {
+        console.error('[ZenstudyTool BG] Proofread error:', error);
+        sendResponse({ success: false, message: error.message || 'AI校正に失敗しました' });
+      });
+    return true;
   }
 
   return false;
