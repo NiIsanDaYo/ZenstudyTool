@@ -1483,9 +1483,6 @@ class ZenstudyToolDownloader {
     this.observer = createDebouncedObserver(() => {
       if (this.enabled) this.checkAndShow();
     }, 150);
-
-    // 初期状態としてBackgroundから動画情報を取得
-    this.requestLatestVideoInfo();
   }
 
   getDownloadButton() {
@@ -1781,6 +1778,7 @@ class ZenstudyToolDownloader {
     } else {
       this.setButtonState('waiting', DOWNLOAD_BUTTON_TEXT.waiting);
       btn.disabled = true;
+      this.requestLatestVideoInfo();
       this.startWaitingPoll();
     }
   }
