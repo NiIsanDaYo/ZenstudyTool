@@ -10,6 +10,8 @@
 // タブごとに最新の動画URLを保持
 const tabVideoUrls = new Map();
 const CONVERSION_TIMEOUT_MS = 5 * 60 * 1000;
+const DOWNLOAD_PROGRESS_THROTTLE_MS = 250;
+const trackedDownloads = new Map();
 
 function createRequestId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
@@ -26,6 +28,168 @@ function requestBlobRevoke(requestId, blobUrl) {
     blobUrl,
   }).catch(() => {});
 }
+
+function cleanupTrackedDownload(downloadId) {
+  const tracked = trackedDownloads.get(downloadId);
+  if (!tracked) return null;
+
+  trackedDownloads.delete(downloadId);
+
+  if (tracked.blobUrl) {
+    requestBlobRevoke(tracked.requestId, tracked.blobUrl);
+  }
+
+  return tracked;
+}
+
+function sendTrackedDownloadProgress(tracked, force = false) {
+  if (!tracked) return;
+
+  const now = Date.now();
+  const total = Number.isFinite(tracked.totalBytes) && tracked.totalBytes > 0
+    ? tracked.totalBytes
+    : 0;
+  const current = Number.isFinite(tracked.bytesReceived) && tracked.bytesReceived > 0
+    ? tracked.bytesReceived
+    : 0;
+  const percentage = total > 0
+    ? Math.floor((current / total) * 100)
+    : -1;
+
+  if (!force) {
+    if (percentage >= 0 && percentage === tracked.lastSentPercentage && (now - tracked.lastSentAt) < DOWNLOAD_PROGRESS_THROTTLE_MS) {
+      return;
+    }
+    if (percentage < 0 && (now - tracked.lastSentAt) < DOWNLOAD_PROGRESS_THROTTLE_MS) {
+      return;
+    }
+  }
+
+  tracked.lastSentAt = now;
+  tracked.lastSentPercentage = percentage;
+
+  sendConversionProgress({
+    type: 'ZST_CONVERSION_PROGRESS',
+    phase: 'save',
+    current,
+    total,
+    requestId: tracked.requestId,
+    outputType: tracked.outputType,
+  }, tracked.sourceTabId);
+}
+
+async function trackBrowserDownload({ url, filename, sourceTabId, requestId, outputType, blobUrl = null }) {
+  sendConversionProgress({
+    type: 'ZST_CONVERSION_PROGRESS',
+    phase: 'save',
+    current: 0,
+    total: 0,
+    requestId,
+    outputType,
+  }, sourceTabId);
+
+  const downloadId = await chrome.downloads.download({
+    url,
+    filename,
+    saveAs: false,
+  });
+
+  const tracked = {
+    requestId,
+    sourceTabId,
+    outputType,
+    blobUrl,
+    bytesReceived: 0,
+    totalBytes: 0,
+    lastSentAt: 0,
+    lastSentPercentage: -1,
+  };
+
+  trackedDownloads.set(downloadId, tracked);
+
+  try {
+    const [downloadItem] = await chrome.downloads.search({ id: downloadId });
+    if (downloadItem) {
+      tracked.bytesReceived = downloadItem.bytesReceived || 0;
+      tracked.totalBytes = downloadItem.totalBytes || 0;
+
+      if (downloadItem.state === 'complete') {
+        sendTrackedDownloadProgress(tracked, true);
+        sendConversionProgress({
+          type: 'ZST_CONVERSION_PROGRESS',
+          phase: 'done',
+          success: true,
+          requestId,
+          outputType,
+        }, sourceTabId);
+        cleanupTrackedDownload(downloadId);
+        return downloadId;
+      }
+
+      if (downloadItem.state === 'interrupted') {
+        sendConversionProgress({
+          type: 'ZST_CONVERSION_PROGRESS',
+          phase: 'error',
+          success: false,
+          requestId,
+          error: downloadItem.error || 'ダウンロードが中断されました',
+        }, sourceTabId);
+        cleanupTrackedDownload(downloadId);
+        return downloadId;
+      }
+    }
+  } catch (err) {
+    console.warn('[ZenstudyTool BG] ダウンロード状態の取得に失敗:', err);
+  }
+
+  sendTrackedDownloadProgress(tracked, true);
+  return downloadId;
+}
+
+chrome.downloads.onChanged.addListener((delta) => {
+  const tracked = trackedDownloads.get(delta.id);
+  if (!tracked) return;
+
+  if (delta.totalBytes && typeof delta.totalBytes.current === 'number') {
+    tracked.totalBytes = delta.totalBytes.current;
+  }
+
+  if (delta.bytesReceived && typeof delta.bytesReceived.current === 'number') {
+    tracked.bytesReceived = delta.bytesReceived.current;
+  }
+
+  if (delta.state?.current === 'complete') {
+    if (tracked.totalBytes > 0) {
+      tracked.bytesReceived = tracked.totalBytes;
+    }
+    sendTrackedDownloadProgress(tracked, true);
+    sendConversionProgress({
+      type: 'ZST_CONVERSION_PROGRESS',
+      phase: 'done',
+      success: true,
+      requestId: tracked.requestId,
+      outputType: tracked.outputType,
+    }, tracked.sourceTabId);
+    cleanupTrackedDownload(delta.id);
+    return;
+  }
+
+  if (delta.state?.current === 'interrupted' || delta.error?.current) {
+    sendConversionProgress({
+      type: 'ZST_CONVERSION_PROGRESS',
+      phase: 'error',
+      success: false,
+      requestId: tracked.requestId,
+      error: delta.error?.current || 'ダウンロードが中断されました',
+    }, tracked.sourceTabId);
+    cleanupTrackedDownload(delta.id);
+    return;
+  }
+
+  if (delta.bytesReceived || delta.totalBytes || delta.state?.current === 'in_progress') {
+    sendTrackedDownloadProgress(tracked);
+  }
+});
 
 // ============================================================
 // ネットワーク傍受: .m3u8 / .mp4 URL を検出
@@ -103,6 +267,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 async function handleDownload({ videoInfo, title, sectionTitle }, sourceTabId) {
   try {
+    const requestId = createRequestId();
     const sanitizedTitle = (title || 'video').replace(/[\\/:*?"<>|]/g, '_').substring(0, 100);
     const sanitizedSection = (sectionTitle || '').replace(/[\\/:*?"<>|]/g, '_').substring(0, 100);
 
@@ -112,16 +277,18 @@ async function handleDownload({ videoInfo, title, sectionTitle }, sourceTabId) {
         ? `${sanitizedSection}/${sanitizedTitle}.mp4`
         : `${sanitizedTitle}.mp4`;
 
-      await chrome.downloads.download({
+      await trackBrowserDownload({
         url: videoInfo.url,
-        filename: filename,
-        saveAs: false,
+        filename,
+        sourceTabId,
+        requestId,
+        outputType: 'mp4',
       });
-      return { success: true, message: 'MP4ダウンロード開始' };
+      return { success: true, message: 'MP4ダウンロード開始', requestId };
     }
 
     // M3U8: offscreen document で処理（可能なら MP4、難しい場合は TS）
-    return await processM3U8Download(videoInfo.url, sanitizedTitle, sanitizedSection, sourceTabId);
+    return await processM3U8Download(videoInfo.url, sanitizedTitle, sanitizedSection, sourceTabId, requestId);
   } catch (err) {
     console.error('[ZenstudyTool BG] ダウンロードエラー:', err);
     return { success: false, message: err.message };
@@ -175,9 +342,8 @@ function sendConversionProgress(message, sourceTabId) {
   broadcastToStudyTabs(message);
 }
 
-async function processM3U8Download(m3u8Url, title, section, sourceTabId) {
+async function processM3U8Download(m3u8Url, title, section, sourceTabId, requestId) {
   await ensureOffscreenDocument();
-  const requestId = createRequestId();
 
   return new Promise((resolve) => {
     let settled = false;
@@ -219,20 +385,15 @@ async function processM3U8Download(m3u8Url, title, section, sourceTabId) {
             ? `${section}/${title}.${outputType}`
             : `${title}.${outputType}`;
 
-          chrome.downloads.download({
+          trackBrowserDownload({
             url: blobUrl,
-            filename: filename,
-            saveAs: false,
+            filename,
+            sourceTabId,
+            requestId,
+            outputType,
+            blobUrl,
           }).then(() => {
-            sendConversionProgress({
-              type: 'ZST_CONVERSION_PROGRESS',
-              phase: 'done',
-              success: true,
-              requestId,
-              outputType: outputType,
-            }, sourceTabId);
-            requestBlobRevoke(requestId, blobUrl);
-            finish({ success: true, message: `${outputType.toUpperCase()}ダウンロード完了` });
+            finish({ success: true, message: `${outputType.toUpperCase()}ダウンロード開始`, requestId });
           }).catch((err) => {
             sendConversionProgress({
               type: 'ZST_CONVERSION_PROGRESS',
