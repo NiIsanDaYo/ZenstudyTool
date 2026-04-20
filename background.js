@@ -14,6 +14,8 @@ const DOWNLOAD_PROGRESS_THROTTLE_MS = 250;
 const GEMINI_REQUEST_TIMEOUT_MS = 30 * 1000;
 const GEMINI_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const DOWNLOAD_PATH_SEGMENT_MAX_LENGTH = 100;
+const WINDOWS_RESERVED_FILE_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const GEMINI_MODEL_MODES = Object.freeze({
   auto: 'auto',
   manual: 'manual',
@@ -108,6 +110,58 @@ const geminiGenerateContentModelsCache = {
   fetchedAt: 0,
   models: [],
 };
+
+function normalizeDownloadPathSegment(value, fallback = '') {
+  const normalized = String(value || '')
+    .replace(/[\\/:*?"<>|\u0000-\u001F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+    .slice(0, DOWNLOAD_PATH_SEGMENT_MAX_LENGTH)
+    .replace(/[. ]+$/g, '');
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  return WINDOWS_RESERVED_FILE_NAME_RE.test(normalized)
+    ? `${normalized}_`
+    : normalized;
+}
+
+function buildDownloadFilename({ title, sectionTitle = '', extension }) {
+  const safeTitle = normalizeDownloadPathSegment(title, 'video');
+  const safeSection = normalizeDownloadPathSegment(sectionTitle, '');
+  return safeSection
+    ? `${safeSection}/${safeTitle}.${extension}`
+    : `${safeTitle}.${extension}`;
+}
+
+function normalizeVideoInfo(videoInfo) {
+  if (!videoInfo || typeof videoInfo !== 'object') {
+    return null;
+  }
+
+  if (videoInfo.type !== 'mp4' && videoInfo.type !== 'm3u8') {
+    return null;
+  }
+
+  if (typeof videoInfo.url !== 'string' || !videoInfo.url.trim()) {
+    return null;
+  }
+
+  try {
+    new URL(videoInfo.url);
+  } catch (_) {
+    return null;
+  }
+
+  return {
+    url: videoInfo.url,
+    type: videoInfo.type,
+    timestamp: Number.isFinite(videoInfo.timestamp) ? videoInfo.timestamp : Date.now(),
+  };
+}
 
 function createRequestId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
@@ -1009,18 +1063,23 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 async function handleDownload({ videoInfo, title, sectionTitle }, sourceTabId) {
   try {
-    const requestId = createRequestId();
-    const sanitizedTitle = (title || 'video').replace(/[\\/:*?"<>|]/g, '_').substring(0, 100);
-    const sanitizedSection = (sectionTitle || '').replace(/[\\/:*?"<>|]/g, '_').substring(0, 100);
+    const normalizedVideo = normalizeVideoInfo(videoInfo);
+    if (!normalizedVideo) {
+      return { success: false, message: '動画URLを取得できませんでした。動画を再生してから、もう一度お試しください。' };
+    }
 
-    if (videoInfo.type === 'mp4') {
+    const requestId = createRequestId();
+
+    if (normalizedVideo.type === 'mp4') {
       // MP4: 直接ダウンロード
-      const filename = sanitizedSection
-        ? `${sanitizedSection}/${sanitizedTitle}.mp4`
-        : `${sanitizedTitle}.mp4`;
+      const filename = buildDownloadFilename({
+        title,
+        sectionTitle,
+        extension: 'mp4',
+      });
 
       await trackBrowserDownload({
-        url: videoInfo.url,
+        url: normalizedVideo.url,
         filename,
         sourceTabId,
         requestId,
@@ -1030,7 +1089,7 @@ async function handleDownload({ videoInfo, title, sectionTitle }, sourceTabId) {
     }
 
     // M3U8: offscreen document で処理（可能なら MP4、難しい場合は TS）
-    return await processM3U8Download(videoInfo.url, sanitizedTitle, sanitizedSection, sourceTabId, requestId);
+    return await processM3U8Download(normalizedVideo.url, title, sectionTitle, sourceTabId, requestId);
   } catch (err) {
     console.error('[ZenstudyTool BG] ダウンロードエラー:', err);
     return { success: false, message: err.message };
@@ -1084,7 +1143,7 @@ function sendConversionProgress(message, sourceTabId) {
   broadcastToStudyTabs(message);
 }
 
-async function processM3U8Download(m3u8Url, title, section, sourceTabId, requestId) {
+async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, requestId) {
   await ensureOffscreenDocument();
 
   return new Promise((resolve) => {
@@ -1123,9 +1182,11 @@ async function processM3U8Download(m3u8Url, title, section, sourceTabId, request
           const blobUrl = message.blobUrl;
 
           // Blob URL からダウンロード
-          const filename = section
-            ? `${section}/${title}.${outputType}`
-            : `${title}.${outputType}`;
+          const filename = buildDownloadFilename({
+            title,
+            sectionTitle,
+            extension: outputType,
+          });
 
           trackBrowserDownload({
             url: blobUrl,
@@ -1173,6 +1234,13 @@ async function processM3U8Download(m3u8Url, title, section, sourceTabId, request
       m3u8Url: m3u8Url,
       requestId,
     }).catch((err) => {
+      sendConversionProgress({
+        type: 'ZST_CONVERSION_PROGRESS',
+        phase: 'error',
+        success: false,
+        requestId,
+        error: err.message,
+      }, sourceTabId);
       finish({ success: false, message: `変換開始エラー: ${err.message}` });
     });
   });

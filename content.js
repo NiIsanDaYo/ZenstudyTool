@@ -166,9 +166,14 @@ const formatByteSize = (bytes) => {
  * @returns {string}
  */
 const formatDailyTime = (seconds) => {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.ceil(seconds % 60);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "0秒";
+  }
+
+  const totalSeconds = Math.ceil(seconds);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
   
   let res = "";
   if (h > 0) res += `${h}時間`;
@@ -1955,6 +1960,12 @@ class ZenstudyToolDownloader {
     }, 150);
   }
 
+  resetDownloadState() {
+    this.isDownloading = false;
+    this.activeDownloadSequence = 0;
+    this.activeConversionRequestId = null;
+  }
+
   getDownloadButton() {
     if (this.btn && document.body.contains(this.btn)) return this.btn;
     const existingBtn = document.getElementById(ELEMENT_IDS.downloadButton);
@@ -1982,9 +1993,7 @@ class ZenstudyToolDownloader {
     this.activeLessonFingerprint = nextFingerprint;
     this.activeLessonChangedAt = nextFingerprint ? Date.now() : 0;
     this.videoInfo = null;
-    this.activeConversionRequestId = null;
-    this.isDownloading = false;
-    this.activeDownloadSequence = 0;
+    this.resetDownloadState();
 
     if (this.resetTimerId) {
       clearTimeout(this.resetTimerId);
@@ -2405,9 +2414,19 @@ class ZenstudyToolDownloader {
     const downloadSequence = ++this.nextDownloadSequence;
     this.activeDownloadSequence = downloadSequence;
     this.isDownloading = true;
-    this.title = await this.resolveTitle();
-    this.sectionTitle = this.getSectionTitle();
-    this.activeConversionRequestId = null;
+
+    try {
+      this.title = await this.resolveTitle();
+      this.sectionTitle = this.getSectionTitle();
+      this.activeConversionRequestId = null;
+    } catch (error) {
+      if (this.activeDownloadSequence === downloadSequence) {
+        this.resetDownloadState();
+        this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+      }
+      alert(`ダウンロード準備に失敗しました: ${error.message || '不明なエラー'}`);
+      return false;
+    }
 
     if (this.activeDownloadSequence !== downloadSequence) {
       return false;
@@ -2425,8 +2444,7 @@ class ZenstudyToolDownloader {
 
       const handleFailure = (message) => {
         if (isActiveDownload) {
-          this.isDownloading = false;
-          this.activeDownloadSequence = 0;
+          this.resetDownloadState();
           this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
         }
 
@@ -2456,6 +2474,7 @@ class ZenstudyToolDownloader {
   removeButton() {
     this.stopWaitingPoll();
     this.lastSelectedTitle = '';
+    this.resetDownloadState();
 
     if (this.resetTimerId) {
       clearTimeout(this.resetTimerId);
@@ -2496,15 +2515,11 @@ class ZenstudyToolDownloader {
         this.setBusyState(DOWNLOAD_BUTTON_TEXT.saving);
       }
     } else if (msg.phase === 'done') {
+      this.resetDownloadState();
       this.setResultState('success', DOWNLOAD_BUTTON_TEXT.success);
-      this.isDownloading = false;
-      this.activeDownloadSequence = 0;
-      this.activeConversionRequestId = null;
     } else if (msg.phase === 'error') {
+      this.resetDownloadState();
       this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
-      this.isDownloading = false;
-      this.activeDownloadSequence = 0;
-      this.activeConversionRequestId = null;
     }
   }
 }
