@@ -17,7 +17,9 @@ const CSS_CLASSES = {
   wrapper: "__ZENSTUDYTOOL_wrapper",
   faint: "__ZENSTUDYTOOL_faint",
   dailyTarget: "__ZENSTUDYTOOL_dailyTarget",
+  downloadButtonGroup: "__ZENSTUDYTOOL_downloadButtonGroup",
   downloadButton: "__ZENSTUDYTOOL_downloadButton",
+  slideDownloadButton: "__ZENSTUDYTOOL_slideDownloadButton",
   actionRow: "__ZENSTUDYTOOL_actionRow",
   footerActionButton: "__ZENSTUDYTOOL_footerActionButton",
   fieldProofreadRow: "__ZENSTUDYTOOL_fieldProofreadRow",
@@ -33,19 +35,29 @@ const PROOFREAD_FIELD_SELECTOR = 'textarea:not([disabled]):not([readonly]), inpu
 /** DOM要素ID */
 const ELEMENT_IDS = {
   copyButton: "__ZENSTUDYTOOL_copy_btn",
+  downloadButtonGroup: "__ZENSTUDYTOOL_download_btn_group",
   downloadButton: "__ZENSTUDYTOOL_download_btn",
+  slideDownloadButton: "__ZENSTUDYTOOL_slide_download_btn",
   proofreadButton: "__ZENSTUDYTOOL_proofread_btn",
 };
 
 /** ダウンロードボタン文言 */
 const DOWNLOAD_BUTTON_TEXT = {
-  ready: "ダウンロード",
+  ready: "動画保存",
   waiting: "URL取得中...",
   preparing: "準備中...",
   downloading: "ダウンロード中...",
   saving: "保存中...",
   started: "保存開始",
   success: "完了",
+  failed: "失敗",
+};
+
+const SLIDE_DOWNLOAD_BUTTON_TEXT = {
+  ready: "画像一括保存",
+  preparing: "画像検出中...",
+  downloading: "保存中...",
+  success: "保存開始",
   failed: "失敗",
 };
 
@@ -84,6 +96,8 @@ const STORAGE_KEYS = {
   alwaysFocusEnabled: "alwaysFocusEnabled",
   copyTextEnabled: "copyTextEnabled",
   downloadEnabled: "downloadEnabled",
+  slideDownloadEnabled: "slideDownloadEnabled",
+  proofreadEnabled: "proofreadEnabled",
   geminiApiKey: "geminiApiKey",
 };
 
@@ -1460,29 +1474,41 @@ class ZenstudyToolCopyText {
 
 class ZenstudyToolProofreader {
   constructor() {
+    this.enabled = true;
     this.apiKeyConfigured = false;
     this.btn = null;
     this.isProcessing = false;
     this.observer = createDebouncedObserver(() => this.checkIframe(), 500);
 
-    safeStorageGet({ [STORAGE_KEYS.geminiApiKey]: "" }, (result) => {
+    safeStorageGet({
+      [STORAGE_KEYS.geminiApiKey]: "",
+      [STORAGE_KEYS.proofreadEnabled]: true,
+    }, (result) => {
+      this.enabled = Boolean(result[STORAGE_KEYS.proofreadEnabled]);
       this.apiKeyConfigured = Boolean((result[STORAGE_KEYS.geminiApiKey] || "").trim());
       this.checkIframe();
     });
 
     addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
+      const enabledChange = changes[STORAGE_KEYS.proofreadEnabled];
       const change = changes[STORAGE_KEYS.geminiApiKey];
-      if (change === undefined) return;
 
-      this.apiKeyConfigured = Boolean((change.newValue || "").trim());
+      if (enabledChange !== undefined) {
+        this.enabled = Boolean(enabledChange.newValue);
+      }
+
+      if (change !== undefined) {
+        this.apiKeyConfigured = Boolean((change.newValue || "").trim());
+      }
+
       this.checkIframe();
     });
   }
 
   checkIframe() {
     const iframe = document.querySelector(ACTION_IFRAME_SELECTOR);
-    if (iframe) {
+    if (this.enabled && iframe) {
       if (!iframe.dataset.zstProofreaderBound) {
         iframe.dataset.zstProofreaderBound = 'true';
         iframe.addEventListener('load', () => {
@@ -1506,6 +1532,8 @@ class ZenstudyToolProofreader {
   }
 
   showButton(iframe) {
+    if (!this.enabled) return;
+
     const iframeDoc = this.getIframeDocument(iframe);
     if (!iframeDoc) return;
 
@@ -1564,6 +1592,10 @@ class ZenstudyToolProofreader {
   }
 
   getProofreadButtonTitle(isBatch = false) {
+    if (!this.enabled) {
+      return 'ポップアップでAI文章校正を有効にしてください';
+    }
+
     if (!this.apiKeyConfigured) {
       return 'ポップアップでGemini APIキーを設定してください';
     }
@@ -1797,6 +1829,11 @@ class ZenstudyToolProofreader {
   async handleSingleFieldProofreadClick(iframe, field, button) {
     if (this.isProcessing) return;
 
+    if (!this.enabled) {
+      alert('ポップアップで AI文章校正 を有効にしてください。');
+      return;
+    }
+
     if (!this.apiKeyConfigured) {
       alert('ポップアップで Gemini API キーを設定してください。');
       return;
@@ -1855,6 +1892,11 @@ class ZenstudyToolProofreader {
   async handleProofreadClick(iframe) {
     if (this.isProcessing) return;
 
+    if (!this.enabled) {
+      alert('ポップアップで AI文章校正 を有効にしてください。');
+      return;
+    }
+
     if (!this.apiKeyConfigured) {
       alert('ポップアップで Gemini API キーを設定してください。');
       return;
@@ -1909,16 +1951,22 @@ class ZenstudyToolProofreader {
 
 class ZenstudyToolDownloader {
   constructor() {
-    this.enabled = true;
+    this.downloadEnabled = true;
+    this.slideDownloadEnabled = true;
     this.videoInfo = null;
     this.title = '';
     this.sectionTitle = '';
     this.lastSelectedTitle = '';
+    this.buttonGroup = null;
     this.btn = null;
+    this.slideBtn = null;
     this.resetTimerId = null;
+    this.slideResetTimerId = null;
     this.waitingPollTimerId = null;
     this.activeConversionRequestId = null;
     this.isDownloading = false;
+    this.activeSlideDownloadRequestId = null;
+    this.isSlideDownloading = false;
     this.nextDownloadSequence = 0;
     this.activeDownloadSequence = 0;
     this.activeLessonFingerprint = '';
@@ -1928,20 +1976,30 @@ class ZenstudyToolDownloader {
     this.handlePotentialLessonSelection = this.handlePotentialLessonSelection.bind(this);
     document.addEventListener('click', this.handlePotentialLessonSelection, true);
 
-    safeStorageGet({ [STORAGE_KEYS.downloadEnabled]: true }, (result) => {
-      this.enabled = result[STORAGE_KEYS.downloadEnabled];
-      if (this.enabled) this.checkAndShow();
+    safeStorageGet({
+      [STORAGE_KEYS.downloadEnabled]: true,
+      [STORAGE_KEYS.slideDownloadEnabled]: true,
+    }, (result) => {
+      this.downloadEnabled = Boolean(result[STORAGE_KEYS.downloadEnabled]);
+      this.slideDownloadEnabled = Boolean(result[STORAGE_KEYS.slideDownloadEnabled]);
+      if (this.hasAnyDownloadEnabled()) this.checkAndShow();
     });
 
     addSafeStorageChangeListener((changes, area) => {
       if (area !== "local") return;
       const downloadChange = changes[STORAGE_KEYS.downloadEnabled];
+      const slideDownloadChange = changes[STORAGE_KEYS.slideDownloadEnabled];
       if (downloadChange !== undefined) {
-        this.enabled = downloadChange.newValue;
-        if (this.enabled) {
+        this.downloadEnabled = Boolean(downloadChange.newValue);
+      }
+      if (slideDownloadChange !== undefined) {
+        this.slideDownloadEnabled = Boolean(slideDownloadChange.newValue);
+      }
+
+      if (downloadChange !== undefined || slideDownloadChange !== undefined) {
+        this.removeButton();
+        if (this.hasAnyDownloadEnabled()) {
           this.checkAndShow();
-        } else {
-          this.removeButton();
         }
       }
     });
@@ -1949,15 +2007,21 @@ class ZenstudyToolDownloader {
     addSafeRuntimeMessageListener((message) => {
       if (message.type === 'ZST_VIDEO_URL_DETECTED') {
         const didUpdate = this.applyVideoInfo(message.videoInfo);
-        if (didUpdate && this.enabled) this.checkAndShow();
+        if (didUpdate && this.hasAnyDownloadEnabled()) this.checkAndShow();
       } else if (message.type === 'ZST_CONVERSION_PROGRESS') {
         this.updateProgress(message);
+      } else if (message.type === 'ZST_SLIDE_DOWNLOAD_PROGRESS') {
+        this.updateSlideProgress(message);
       }
     });
 
     this.observer = createDebouncedObserver(() => {
-      if (this.enabled) this.checkAndShow();
+      if (this.hasAnyDownloadEnabled()) this.checkAndShow();
     }, 150);
+  }
+
+  hasAnyDownloadEnabled() {
+    return this.downloadEnabled || this.slideDownloadEnabled;
   }
 
   resetDownloadState() {
@@ -1966,11 +2030,48 @@ class ZenstudyToolDownloader {
     this.activeConversionRequestId = null;
   }
 
+  resetSlideDownloadState() {
+    this.isSlideDownloading = false;
+    this.activeSlideDownloadRequestId = null;
+  }
+
+  getButtonGroup() {
+    if (this.buttonGroup && document.body.contains(this.buttonGroup)) return this.buttonGroup;
+    const existingGroup = document.getElementById(ELEMENT_IDS.downloadButtonGroup);
+    this.buttonGroup = existingGroup || null;
+    return this.buttonGroup;
+  }
+
+  ensureButtonGroup(modalContent) {
+    let group = this.getButtonGroup();
+    if (group) return group;
+
+    group = document.createElement('div');
+    group.id = ELEMENT_IDS.downloadButtonGroup;
+    group.className = CSS_CLASSES.downloadButtonGroup;
+    modalContent.appendChild(group);
+    this.buttonGroup = group;
+    return group;
+  }
+
   getDownloadButton() {
     if (this.btn && document.body.contains(this.btn)) return this.btn;
     const existingBtn = document.getElementById(ELEMENT_IDS.downloadButton);
     this.btn = existingBtn || null;
     return this.btn;
+  }
+
+  getSlideDownloadButton() {
+    if (this.slideBtn && document.body.contains(this.slideBtn)) return this.slideBtn;
+    const existingBtn = document.getElementById(ELEMENT_IDS.slideDownloadButton);
+    this.slideBtn = existingBtn || null;
+    return this.slideBtn;
+  }
+
+  setActionButtonState(button, state, text) {
+    if (!button) return;
+    button.dataset.state = state;
+    button.textContent = text;
   }
 
   getCurrentLessonFingerprint() {
@@ -1994,10 +2095,16 @@ class ZenstudyToolDownloader {
     this.activeLessonChangedAt = nextFingerprint ? Date.now() : 0;
     this.videoInfo = null;
     this.resetDownloadState();
+    this.resetSlideDownloadState();
 
     if (this.resetTimerId) {
       clearTimeout(this.resetTimerId);
       this.resetTimerId = null;
+    }
+
+    if (this.slideResetTimerId) {
+      clearTimeout(this.slideResetTimerId);
+      this.slideResetTimerId = null;
     }
 
     return true;
@@ -2026,7 +2133,7 @@ class ZenstudyToolDownloader {
   requestLatestVideoInfo() {
     safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response, error) => {
       if (error) return;
-      if (response && response.videoInfo && this.applyVideoInfo(response.videoInfo) && this.enabled) {
+      if (response && response.videoInfo && this.applyVideoInfo(response.videoInfo) && this.downloadEnabled) {
         this.checkAndShow();
       }
     });
@@ -2241,11 +2348,210 @@ class ZenstudyToolDownloader {
     return this.getTitle();
   }
 
+  pickLargestSrcsetCandidate(srcset) {
+    const candidates = String(srcset || '')
+      .split(',')
+      .map((entry) => entry.trim().split(/\s+/)[0])
+      .filter(Boolean);
+
+    return candidates.length > 0 ? candidates[candidates.length - 1] : '';
+  }
+
+  resolveAssetUrl(candidate, baseUrl) {
+    if (!candidate) return '';
+
+    try {
+      return new URL(candidate, baseUrl || window.location.href).href;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  waitForIframeDocument(iframe, timeoutMs = 4000) {
+    const existingDoc = this.getIframeDocument(iframe);
+    if (existingDoc && existingDoc.readyState !== 'loading') {
+      return Promise.resolve(existingDoc);
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+
+      const finish = (doc) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        resolve(doc || null);
+      };
+
+      const onLoad = () => {
+        finish(this.getIframeDocument(iframe));
+      };
+
+      const timeoutId = setTimeout(() => {
+        iframe.removeEventListener('load', onLoad);
+        finish(this.getIframeDocument(iframe));
+      }, timeoutMs);
+
+      iframe.addEventListener('load', onLoad, { once: true });
+    });
+  }
+
+  async collectNestedFrameDocuments(frames, seenDocs = new Set()) {
+    const docs = [];
+
+    for (const frame of frames) {
+      const doc = await this.waitForIframeDocument(frame);
+      if (!doc || seenDocs.has(doc)) continue;
+
+      seenDocs.add(doc);
+      docs.push(doc);
+
+      const childFrames = Array.from(doc.querySelectorAll('iframe'));
+      if (childFrames.length > 0) {
+        docs.push(...await this.collectNestedFrameDocuments(childFrames, seenDocs));
+      }
+    }
+
+    return docs;
+  }
+
+  async getSlideDocuments() {
+    const movieDoc = this.getIframeDocument(this.getModalIframe());
+    if (!movieDoc) return [];
+
+    const referenceFrames = Array.from(
+      movieDoc.querySelectorAll('iframe[src*="/references/"], iframe[aria-label*="補助テキスト"], iframe[aria-label*="スライド"]')
+    );
+
+    if (referenceFrames.length === 0) {
+      const fallbackFrames = Array.from(movieDoc.querySelectorAll('iframe'));
+      return fallbackFrames.length > 0
+        ? this.collectNestedFrameDocuments(fallbackFrames)
+        : [movieDoc];
+    }
+
+    return this.collectNestedFrameDocuments(referenceFrames);
+  }
+
+  isDownloadableSlideUrl(url) {
+    if (!url || /^data:/i.test(url) || /^blob:/i.test(url)) return false;
+
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  isLikelySlideImageElement(image, url) {
+    if (!this.isDownloadableSlideUrl(url)) return false;
+
+    const width = image.naturalWidth || Number.parseInt(image.getAttribute('width') || '', 10) || image.clientWidth || 0;
+    const height = image.naturalHeight || Number.parseInt(image.getAttribute('height') || '', 10) || image.clientHeight || 0;
+
+    let extension = '';
+    try {
+      const pathname = new URL(url).pathname;
+      extension = pathname.split('.').pop()?.toLowerCase() || '';
+    } catch (_) {
+      extension = '';
+    }
+
+    if (extension === 'svg' && (!width || width < 240) && (!height || height < 160)) {
+      return false;
+    }
+
+    if (width && height && (width < 240 || height < 160)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  sanitizeSlideFileStem(text) {
+    return String(text || '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[. ]+$/g, '')
+      .slice(0, 40)
+      .replace(/[. ]+$/g, '');
+  }
+
+  buildSlideFileStem(index, rawLabel = '') {
+    const prefix = `slide_${String(index + 1).padStart(3, '0')}`;
+    const label = this.sanitizeSlideFileStem(rawLabel);
+    return label ? `${prefix}_${label}` : prefix;
+  }
+
+  collectSlideImagesFromDocument(doc, images, seenUrls) {
+    const imageElements = Array.from(doc.querySelectorAll('img'));
+    let foundDirectImage = false;
+
+    for (const image of imageElements) {
+      const candidateUrl = image.currentSrc
+        || image.getAttribute('src')
+        || image.getAttribute('data-src')
+        || image.getAttribute('data-lazy-src')
+        || image.getAttribute('data-original')
+        || this.pickLargestSrcsetCandidate(image.getAttribute('srcset'))
+        || this.pickLargestSrcsetCandidate(image.getAttribute('data-srcset'));
+      const url = this.resolveAssetUrl(candidateUrl, doc.baseURI);
+
+      if (!this.isLikelySlideImageElement(image, url) || seenUrls.has(url)) {
+        continue;
+      }
+
+      const label = image.getAttribute('alt')
+        || image.getAttribute('title')
+        || image.getAttribute('aria-label')
+        || image.closest('[aria-label]')?.getAttribute('aria-label')
+        || '';
+
+      seenUrls.add(url);
+      foundDirectImage = true;
+      images.push({
+        url,
+        fileStem: this.buildSlideFileStem(images.length, label),
+      });
+    }
+
+    if (foundDirectImage) return;
+
+    const anchorElements = Array.from(doc.querySelectorAll('a[href]'));
+    for (const anchor of anchorElements) {
+      const url = this.resolveAssetUrl(anchor.getAttribute('href'), doc.baseURI);
+      if (!this.isDownloadableSlideUrl(url) || seenUrls.has(url)) continue;
+      if (!/\.(?:png|jpe?g|webp|gif|bmp)(?:[?#]|$)/i.test(url)) continue;
+
+      const label = anchor.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+      seenUrls.add(url);
+      images.push({
+        url,
+        fileStem: this.buildSlideFileStem(images.length, label),
+      });
+    }
+  }
+
+  async collectSlideImages() {
+    const docs = await this.getSlideDocuments();
+    const images = [];
+    const seenUrls = new Set();
+
+    for (const doc of docs) {
+      this.collectSlideImagesFromDocument(doc, images, seenUrls);
+    }
+
+    return images;
+  }
+
   setButtonState(state, text) {
-    const btn = this.getDownloadButton();
-    if (!btn) return;
-    btn.dataset.state = state;
-    btn.textContent = text;
+    this.setActionButtonState(this.getDownloadButton(), state, text);
+  }
+
+  setSlideButtonState(state, text) {
+    this.setActionButtonState(this.getSlideDownloadButton(), state, text);
   }
 
   setReadyState() {
@@ -2270,7 +2576,7 @@ class ZenstudyToolDownloader {
     if (this.waitingPollTimerId) return;
 
     this.waitingPollTimerId = setInterval(() => {
-      if (!this.enabled || !this.hasVideoModalOpen()) {
+      if (!this.downloadEnabled || !this.hasVideoModalOpen()) {
         this.stopWaitingPoll();
         return;
       }
@@ -2308,6 +2614,35 @@ class ZenstudyToolDownloader {
     if (this.resetTimerId) clearTimeout(this.resetTimerId);
     this.resetTimerId = setTimeout(() => {
       this.setReadyState();
+    }, 2500);
+  }
+
+  setSlideReadyState() {
+    const btn = this.getSlideDownloadButton();
+    if (!btn) return;
+
+    this.setSlideButtonState('ready', SLIDE_DOWNLOAD_BUTTON_TEXT.ready);
+    btn.disabled = false;
+  }
+
+  setSlideBusyState(text = SLIDE_DOWNLOAD_BUTTON_TEXT.preparing) {
+    const btn = this.getSlideDownloadButton();
+    if (!btn) return;
+
+    this.setSlideButtonState('loading', text);
+    btn.disabled = true;
+  }
+
+  setSlideResultState(state, text) {
+    const btn = this.getSlideDownloadButton();
+    if (!btn) return;
+
+    this.setSlideButtonState(state, text);
+    btn.disabled = state !== 'error';
+
+    if (this.slideResetTimerId) clearTimeout(this.slideResetTimerId);
+    this.slideResetTimerId = setTimeout(() => {
+      this.setSlideReadyState();
     }, 2500);
   }
 
@@ -2369,7 +2704,7 @@ class ZenstudyToolDownloader {
   }
 
   checkAndShow() {
-    if (!this.hasVideoModalOpen()) {
+    if (!this.hasVideoModalOpen() || !this.hasAnyDownloadEnabled()) {
       this.syncLessonContext();
       this.removeButton();
       return;
@@ -2380,31 +2715,62 @@ class ZenstudyToolDownloader {
     const modalContent = document.querySelector('.ReactModal__Content');
     if (!modalContent) return;
 
+    const buttonGroup = this.ensureButtonGroup(modalContent);
     let btn = this.getDownloadButton();
+    let slideBtn = this.getSlideDownloadButton();
+    const hasRequiredButtons = (!this.downloadEnabled || Boolean(btn)) && (!this.slideDownloadEnabled || Boolean(slideBtn));
     
-    if (btn) {
-      if (lessonChanged || (!this.hasCurrentVideoInfo() && btn.dataset.state !== 'waiting') || (this.hasCurrentVideoInfo() && btn.dataset.state === 'waiting')) {
+    if (hasRequiredButtons) {
+      const needsVideoButtonRefresh = this.downloadEnabled && (
+        lessonChanged
+        || (!this.hasCurrentVideoInfo() && btn.dataset.state !== 'waiting')
+        || (this.hasCurrentVideoInfo() && btn.dataset.state === 'waiting')
+      );
+
+      if (needsVideoButtonRefresh) {
         this.setReadyState();
       }
+
+      if (this.slideDownloadEnabled && lessonChanged && !this.isSlideDownloading) {
+        this.setSlideReadyState();
+      }
+
       return;
     }
 
     this.title = this.getTitle();
     this.sectionTitle = this.getSectionTitle();
 
-    this.btn = document.createElement('button');
-    btn = this.btn;
-    btn.id = ELEMENT_IDS.downloadButton;
-    btn.type = 'button';
-    btn.className = CSS_CLASSES.downloadButton;
-    btn.addEventListener('click', () => this.handleDownloadClick());
+    if (this.downloadEnabled && !btn) {
+      this.btn = document.createElement('button');
+      btn = this.btn;
+      btn.id = ELEMENT_IDS.downloadButton;
+      btn.type = 'button';
+      btn.className = CSS_CLASSES.downloadButton;
+      btn.addEventListener('click', () => this.handleDownloadClick());
+      buttonGroup.appendChild(btn);
+    }
 
-    // モーダルの直下に挿入
-    modalContent.appendChild(btn);
-    this.setReadyState();
+    if (this.slideDownloadEnabled && !slideBtn) {
+      this.slideBtn = document.createElement('button');
+      slideBtn = this.slideBtn;
+      slideBtn.id = ELEMENT_IDS.slideDownloadButton;
+      slideBtn.type = 'button';
+      slideBtn.className = CSS_CLASSES.slideDownloadButton;
+      slideBtn.addEventListener('click', () => this.handleSlideDownloadClick());
+      buttonGroup.appendChild(slideBtn);
+    }
+
+    if (this.downloadEnabled) {
+      this.setReadyState();
+    }
+    if (this.slideDownloadEnabled && !this.isSlideDownloading) {
+      this.setSlideReadyState();
+    }
   }
 
   async startDownload() {
+    if (!this.downloadEnabled) return false;
     if (this.isDownloading || !this.hasCurrentVideoInfo()) return false;
 
     const btn = this.getDownloadButton();
@@ -2471,19 +2837,100 @@ class ZenstudyToolDownloader {
     void this.startDownload();
   }
 
+  async startSlideDownload() {
+    if (!this.slideDownloadEnabled) return false;
+    if (this.isSlideDownloading || !this.hasVideoModalOpen()) return false;
+
+    const btn = this.getSlideDownloadButton();
+    if (btn && btn.disabled) return false;
+
+    const lessonFingerprint = this.getCurrentLessonFingerprint();
+    this.isSlideDownloading = true;
+    this.activeSlideDownloadRequestId = null;
+
+    try {
+      this.title = await this.resolveTitle();
+      this.sectionTitle = this.getSectionTitle();
+
+      if (this.getCurrentLessonFingerprint() !== lessonFingerprint) {
+        this.resetSlideDownloadState();
+        return false;
+      }
+
+      this.setSlideBusyState(SLIDE_DOWNLOAD_BUTTON_TEXT.preparing);
+      const images = await this.collectSlideImages();
+
+      if (this.getCurrentLessonFingerprint() !== lessonFingerprint) {
+        this.resetSlideDownloadState();
+        return false;
+      }
+
+      if (images.length === 0) {
+        this.resetSlideDownloadState();
+        this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+        alert('スライド画像が見つかりませんでした。補助テキストが読み込まれてからもう一度お試しください。');
+        return false;
+      }
+
+      safeRuntimeSendMessage({
+        type: 'ZST_DOWNLOAD_SLIDE_IMAGES',
+        images,
+        title: this.title,
+        sectionTitle: this.sectionTitle,
+      }, (response, error) => {
+        if (error) {
+          this.resetSlideDownloadState();
+          this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+          alert('スライド保存に失敗しました: ' + (error.message || '不明なエラー'));
+          return;
+        }
+
+        if (!response || !response.success) {
+          this.resetSlideDownloadState();
+          this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+          alert('スライド保存に失敗しました: ' + (response?.message || '不明なエラー'));
+          return;
+        }
+
+        if (response.requestId && !this.activeSlideDownloadRequestId) {
+          this.activeSlideDownloadRequestId = response.requestId;
+        }
+      });
+    } catch (error) {
+      this.resetSlideDownloadState();
+      this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+      alert(`スライド保存の準備に失敗しました: ${error.message || '不明なエラー'}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  handleSlideDownloadClick() {
+    void this.startSlideDownload();
+  }
+
   removeButton() {
     this.stopWaitingPoll();
     this.lastSelectedTitle = '';
     this.resetDownloadState();
+    this.resetSlideDownloadState();
 
     if (this.resetTimerId) {
       clearTimeout(this.resetTimerId);
       this.resetTimerId = null;
     }
 
-    const existingBtn = document.getElementById(ELEMENT_IDS.downloadButton);
-    if (existingBtn) existingBtn.remove();
+    if (this.slideResetTimerId) {
+      clearTimeout(this.slideResetTimerId);
+      this.slideResetTimerId = null;
+    }
+
+    const existingGroup = document.getElementById(ELEMENT_IDS.downloadButtonGroup);
+    if (existingGroup) existingGroup.remove();
+    this.buttonGroup = null;
     this.btn = null;
+    this.slideBtn = null;
   }
 
   updateProgress(msg) {
@@ -2520,6 +2967,44 @@ class ZenstudyToolDownloader {
     } else if (msg.phase === 'error') {
       this.resetDownloadState();
       this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+    }
+  }
+
+  updateSlideProgress(msg) {
+    if (!this.getSlideDownloadButton() || !this.isSlideDownloading) return;
+
+    if (msg && msg.requestId) {
+      if (this.activeSlideDownloadRequestId && this.activeSlideDownloadRequestId !== msg.requestId) {
+        return;
+      }
+
+      if (!this.activeSlideDownloadRequestId && (msg.phase === 'prepare' || msg.phase === 'queue')) {
+        this.activeSlideDownloadRequestId = msg.requestId;
+      }
+    }
+
+    if (msg.phase === 'prepare') {
+      this.setSlideBusyState(SLIDE_DOWNLOAD_BUTTON_TEXT.preparing);
+      return;
+    }
+
+    if (msg.phase === 'queue') {
+      const progressText = msg.total > 0
+        ? `${SLIDE_DOWNLOAD_BUTTON_TEXT.downloading} ${Math.min(msg.current, msg.total)}/${msg.total}`
+        : SLIDE_DOWNLOAD_BUTTON_TEXT.downloading;
+      this.setSlideBusyState(progressText);
+      return;
+    }
+
+    if (msg.phase === 'done') {
+      this.resetSlideDownloadState();
+      this.setSlideResultState('success', SLIDE_DOWNLOAD_BUTTON_TEXT.success);
+      return;
+    }
+
+    if (msg.phase === 'error') {
+      this.resetSlideDownloadState();
+      this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
     }
   }
 }

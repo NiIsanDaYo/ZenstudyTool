@@ -137,6 +137,70 @@ function buildDownloadFilename({ title, sectionTitle = '', extension }) {
     : `${safeTitle}.${extension}`;
 }
 
+function buildDownloadDirectory({ title, sectionTitle = '', suffix = '' }) {
+  const safeTitle = normalizeDownloadPathSegment(title, 'video');
+  const safeSection = normalizeDownloadPathSegment(sectionTitle, '');
+  const safeSuffix = normalizeDownloadPathSegment(suffix, '');
+  const leafDirectory = safeSuffix ? `${safeTitle}_${safeSuffix}` : safeTitle;
+
+  return safeSection
+    ? `${safeSection}/${leafDirectory}`
+    : leafDirectory;
+}
+
+function getDownloadExtensionFromUrl(url, fallback = 'jpg') {
+  try {
+    const pathname = new URL(url).pathname;
+    const match = pathname.match(/\.([a-zA-Z0-9]{1,8})$/);
+    if (match) return match[1].toLowerCase();
+  } catch (_) {
+    // URL parse failure falls back below.
+  }
+
+  return fallback;
+}
+
+function normalizeSlideImageEntries(images) {
+  if (!Array.isArray(images)) {
+    return [];
+  }
+
+  const normalizedImages = [];
+  const seenUrls = new Set();
+
+  for (const [index, item] of images.entries()) {
+    const rawUrl = typeof item === 'string' ? item : item?.url;
+    if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+      continue;
+    }
+
+    let url;
+    try {
+      url = new URL(rawUrl).href;
+    } catch (_) {
+      continue;
+    }
+
+    if (seenUrls.has(url)) {
+      continue;
+    }
+    seenUrls.add(url);
+
+    const rawFileStem = typeof item === 'object' && item
+      ? (item.fileStem || item.name || '')
+      : '';
+    const sanitizedFileStem = normalizeDownloadPathSegment(rawFileStem, '')
+      .replace(/\.[^.]+$/u, '');
+
+    normalizedImages.push({
+      url,
+      fileStem: sanitizedFileStem || `slide_${String(index + 1).padStart(3, '0')}`,
+    });
+  }
+
+  return normalizedImages;
+}
+
 function normalizeVideoInfo(videoInfo) {
   if (!videoInfo || typeof videoInfo !== 'object') {
     return null;
@@ -1037,6 +1101,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // 非同期レスポンス
   }
 
+  if (message.type === 'ZST_DOWNLOAD_SLIDE_IMAGES') {
+    downloadSlideImages(message, sender.tab?.id).then(sendResponse);
+    return true;
+  }
+
   if (message.type === 'ZST_PROOFREAD_TEXT') {
     proofreadWithGemini(message)
       .then(({ correctedText, model, resolvedModel, strategy }) => {
@@ -1093,6 +1162,82 @@ async function handleDownload({ videoInfo, title, sectionTitle }, sourceTabId) {
   } catch (err) {
     console.error('[ZenstudyTool BG] ダウンロードエラー:', err);
     return { success: false, message: err.message };
+  }
+}
+
+async function downloadSlideImages({ images, title, sectionTitle }, sourceTabId) {
+  const normalizedImages = normalizeSlideImageEntries(images);
+  if (normalizedImages.length === 0) {
+    return { success: false, message: '保存できるスライド画像が見つかりませんでした。' };
+  }
+
+  const requestId = createRequestId();
+  const baseDirectory = buildDownloadDirectory({
+    title,
+    sectionTitle,
+    suffix: 'slides',
+  });
+
+  try {
+    sendConversionProgress({
+      type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+      phase: 'prepare',
+      current: 0,
+      total: normalizedImages.length,
+      requestId,
+    }, sourceTabId);
+
+    for (let index = 0; index < normalizedImages.length; index += 1) {
+      const image = normalizedImages[index];
+      const fallbackStem = `slide_${String(index + 1).padStart(3, '0')}`;
+      const fileStem = normalizeDownloadPathSegment(image.fileStem, fallbackStem) || fallbackStem;
+      const extension = getDownloadExtensionFromUrl(image.url, 'jpg');
+
+      await chrome.downloads.download({
+        url: image.url,
+        filename: `${baseDirectory}/${fileStem}.${extension}`,
+        saveAs: false,
+        conflictAction: 'uniquify',
+      });
+
+      sendConversionProgress({
+        type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+        phase: 'queue',
+        current: index + 1,
+        total: normalizedImages.length,
+        requestId,
+      }, sourceTabId);
+    }
+
+    sendConversionProgress({
+      type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+      phase: 'done',
+      success: true,
+      current: normalizedImages.length,
+      total: normalizedImages.length,
+      requestId,
+    }, sourceTabId);
+
+    return {
+      success: true,
+      count: normalizedImages.length,
+      requestId,
+      message: `${normalizedImages.length}件のスライド保存を開始しました`,
+    };
+  } catch (error) {
+    sendConversionProgress({
+      type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+      phase: 'error',
+      success: false,
+      requestId,
+      error: error.message || 'スライド保存に失敗しました',
+    }, sourceTabId);
+
+    return {
+      success: false,
+      requestId,
+      message: error.message || 'スライド保存に失敗しました',
+    };
   }
 }
 

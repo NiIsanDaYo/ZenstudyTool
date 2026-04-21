@@ -15,13 +15,23 @@
   color: #b3b3b3;
 }
 
-.__ZENSTUDYTOOL_downloadButton {
-  all: initial;
-  box-sizing: border-box;
+.__ZENSTUDYTOOL_downloadButtonGroup {
   position: absolute;
   top: 16px;
   right: 80px;
   z-index: 9999;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  max-width: calc(100% - 96px);
+}
+
+.__ZENSTUDYTOOL_downloadButton,
+.__ZENSTUDYTOOL_slideDownloadButton {
+  all: initial;
+  box-sizing: border-box;
+  position: relative;
   min-height: 40px;
   padding: 0 16px;
   border: none;
@@ -39,7 +49,9 @@
 }
 
 .__ZENSTUDYTOOL_downloadButton[data-state="waiting"],
-.__ZENSTUDYTOOL_downloadButton[data-state="loading"] {
+.__ZENSTUDYTOOL_downloadButton[data-state="loading"],
+.__ZENSTUDYTOOL_slideDownloadButton[data-state="waiting"],
+.__ZENSTUDYTOOL_slideDownloadButton[data-state="loading"] {
   background-color: #6f7782;
 }
 
@@ -47,15 +59,22 @@
   background-color: #0077d3;
 }
 
-.__ZENSTUDYTOOL_downloadButton[data-state="success"] {
+.__ZENSTUDYTOOL_slideDownloadButton[data-state="ready"] {
+  background-color: #156f5b;
+}
+
+.__ZENSTUDYTOOL_downloadButton[data-state="success"],
+.__ZENSTUDYTOOL_slideDownloadButton[data-state="success"] {
   background-color: #00a95c;
 }
 
-.__ZENSTUDYTOOL_downloadButton[data-state="error"] {
+.__ZENSTUDYTOOL_downloadButton[data-state="error"],
+.__ZENSTUDYTOOL_slideDownloadButton[data-state="error"] {
   background-color: #d44c4c;
 }
 
-.__ZENSTUDYTOOL_downloadButton:disabled {
+.__ZENSTUDYTOOL_downloadButton:disabled,
+.__ZENSTUDYTOOL_slideDownloadButton:disabled {
   cursor: not-allowed;
   opacity: 0.85;
 }
