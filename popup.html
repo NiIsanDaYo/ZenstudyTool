@@ -254,8 +254,27 @@
     </label>
   </div>
 
+  <div class="setting-item">
+    <div>
+      <span class="setting-label">スライド画像の一括保存</span>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="toggleSlideDownload">
+      <span class="slider"></span>
+    </label>
+  </div>
+
   <section class="panel">
     <h3 class="panel-title">AI文章校正</h3>
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">AI文章校正を有効化</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleProofread">
+        <span class="slider"></span>
+      </label>
+    </div>
     <p class="panel-copy">レポートや論述の入力内容を AI で校正します。自動選択では対応モデルを順番に試し、失敗時は次のモデルへフォールバックします。</p>
     <div class="ai-field">
       <label for="geminiModelMode" class="ai-label">モデルモード</label>

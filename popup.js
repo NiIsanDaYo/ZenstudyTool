@@ -27,6 +27,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const toggleAlwaysFocus = document.getElementById('toggleAlwaysFocus');
   const toggleCopyText = document.getElementById('toggleCopyText');
   const toggleDownload = document.getElementById('toggleDownload');
+  const toggleSlideDownload = document.getElementById('toggleSlideDownload');
+  const toggleProofread = document.getElementById('toggleProofread');
   const geminiApiKeyInput = document.getElementById('geminiApiKey');
   const geminiModelMode = document.getElementById('geminiModelMode');
   const geminiSelectedModel = document.getElementById('geminiSelectedModel');
@@ -51,7 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const setApiKeyStatus = (message) => {
     if (geminiApiKeyStatus) {
-      geminiApiKeyStatus.textContent = message;
+      const suffix = toggleProofread && !toggleProofread.checked ? ' / AI校正はOFF' : '';
+      geminiApiKeyStatus.textContent = `${message}${suffix}`;
     }
   };
 
@@ -136,6 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
       alwaysFocusEnabled: true,
       copyTextEnabled: true,
       downloadEnabled: true,
+      slideDownloadEnabled: true,
+      proofreadEnabled: true,
       geminiApiKey: '',
       geminiModelMode: GEMINI_MODEL_MODES.auto,
       geminiSelectedModel: DEFAULT_GEMINI_MODEL,
@@ -148,6 +153,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (toggleAlwaysFocus) toggleAlwaysFocus.checked = result.alwaysFocusEnabled;
       if (toggleCopyText) toggleCopyText.checked = result.copyTextEnabled;
       if (toggleDownload) toggleDownload.checked = result.downloadEnabled;
+      if (toggleSlideDownload) toggleSlideDownload.checked = result.slideDownloadEnabled;
+      if (toggleProofread) toggleProofread.checked = result.proofreadEnabled;
       if (geminiApiKeyInput) geminiApiKeyInput.value = result.geminiApiKey || '';
       lastSavedApiKey = (result.geminiApiKey || '').trim();
       if (geminiModelMode) geminiModelMode.value = normalizeModelMode(result.geminiModelMode);
@@ -197,6 +204,27 @@ document.addEventListener('DOMContentLoaded', () => {
   if (toggleDownload) {
     toggleDownload.addEventListener('change', () => {
       chrome.storage.local.set({ downloadEnabled: toggleDownload.checked });
+    });
+  }
+
+  if (toggleSlideDownload) {
+    toggleSlideDownload.addEventListener('change', () => {
+      chrome.storage.local.set({ slideDownloadEnabled: toggleSlideDownload.checked });
+    });
+  }
+
+  if (toggleProofread) {
+    toggleProofread.addEventListener('change', () => {
+      chrome.storage.local.set({ proofreadEnabled: toggleProofread.checked }, () => {
+        const lastError = chrome.runtime?.lastError || null;
+        if (lastError) {
+          setApiKeyStatus('AI文章校正の設定保存に失敗しました');
+          return;
+        }
+
+        const prefix = toggleProofread.checked ? 'AI文章校正を有効化しました' : 'AI文章校正を無効化しました';
+        setApiKeyStatus(`${prefix} (${getCurrentModeLabel()})`);
+      });
     });
   }
 
