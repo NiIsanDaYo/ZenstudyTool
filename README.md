@@ -70,7 +70,7 @@ DOM操作やデータ抽出、WebAssemblyを用いたメディア処理などの
 - フッターの「まとめてAI校正」は、入力済みの自由記述欄を順番にまとめて校正します。
 - 各入力欄の「AI校正」は、その欄だけを個別に校正します。
 - モデルモードが自動選択のときは、次の順で利用可能なモデルを試します。
-  `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-3-flash-preview` → `gemini-3.1-flash-lite-preview` → `gemma-4-31b` → `gemma-4-26b-a4b` → `gemma-3-27b` → `gemma-3-12b` → `gemma-3-4b` → `gemma-3-2b` → `gemma-3-1b`
+  `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-3-flash-preview` → `gemini-3.1-flash-lite` → `gemini-3.1-flash-lite-preview` → `gemma-4-31b` → `gemma-4-26b-a4b` → `gemma-3-27b` → `gemma-3-12b` → `gemma-3-4b` → `gemma-3-2b` → `gemma-3-1b`
 - Gemma 系は、利用可能なら `-it` 系の hosted model に自動解決して使用します。
 
 ## 動画ダウンロード仕様

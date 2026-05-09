@@ -24,6 +24,7 @@ const GEMINI_PROOFREAD_FALLBACK_MODELS = Object.freeze([
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
   'gemini-3.1-flash-lite-preview',
   'gemma-4-31b',
   'gemma-4-26b-a4b',
@@ -49,6 +50,11 @@ const PROOFREAD_RESPONSE_JSON_SCHEMA = Object.freeze({
 });
 const GEMINI_PROOFREAD_MODEL_CONFIGS = Object.freeze({
   'gemini-3-flash-preview': {
+    supportsSystemInstruction: true,
+    supportsStructuredOutput: true,
+    preserveDefaultTemperature: true,
+  },
+  'gemini-3.1-flash-lite': {
     supportsSystemInstruction: true,
     supportsStructuredOutput: true,
     preserveDefaultTemperature: true,
