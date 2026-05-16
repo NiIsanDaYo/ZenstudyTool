@@ -28,9 +28,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.nnn.ed.nico/*", "*://www.nnn.ed.nico/*"],
-      "css": ["zenstudy-tool.css"],
-      "js": ["content.js"],
+      "matches": [
+        "*://*.nnn.ed.nico/*",
+        "*://www.nnn.ed.nico/*"
+      ],
+      "css": [
+        "zenstudy-tool.css"
+      ],
+      "js": [
+        "content/utils.js",
+        "content/auto-filter.js",
+        "content/time-logic.js",
+        "content/ui.js",
+        "content/auto-skip.js",
+        "content/always-focus.js",
+        "content/copy-text.js",
+        "content/proofreader.js",
+        "content/downloader.js",
+        "content/main.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }

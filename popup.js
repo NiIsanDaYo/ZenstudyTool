@@ -37,6 +37,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const geminiApiKeyStatus = document.getElementById('geminiApiKeyStatus');
   let lastSavedApiKey = '';
 
+  // タブ切り替えロジック
+  const tabBtns = document.querySelectorAll('.tab-btn');
+  const tabContents = document.querySelectorAll('.tab-content');
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      
+      tabBtns.forEach(b => b.classList.remove('active'));
+      tabContents.forEach(c => c.classList.remove('active'));
+      
+      btn.classList.add('active');
+      document.getElementById(targetId).classList.add('active');
+    });
+  });
+
   const normalizeModelMode = (value) => {
     return value === GEMINI_MODEL_MODES.manual ? GEMINI_MODEL_MODES.manual : GEMINI_MODEL_MODES.auto;
   };

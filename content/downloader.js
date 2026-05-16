@@ -1,0 +1,1059 @@
+class ZenstudyToolDownloader {
+  constructor() {
+    this.downloadEnabled = true;
+    this.slideDownloadEnabled = true;
+    this.videoInfo = null;
+    this.title = '';
+    this.sectionTitle = '';
+    this.lastSelectedTitle = '';
+    this.buttonGroup = null;
+    this.btn = null;
+    this.slideBtn = null;
+    this.resetTimerId = null;
+    this.slideResetTimerId = null;
+    this.waitingPollTimerId = null;
+    this.activeConversionRequestId = null;
+    this.isDownloading = false;
+    this.activeSlideDownloadRequestId = null;
+    this.isSlideDownloading = false;
+    this.nextDownloadSequence = 0;
+    this.activeDownloadSequence = 0;
+    this.activeLessonFingerprint = '';
+    this.activeLessonChangedAt = 0;
+    this.chapterDataCache = new Map();
+
+    this.handlePotentialLessonSelection = this.handlePotentialLessonSelection.bind(this);
+    document.addEventListener('click', this.handlePotentialLessonSelection, true);
+
+    safeStorageGet({
+      [STORAGE_KEYS.downloadEnabled]: true,
+      [STORAGE_KEYS.slideDownloadEnabled]: true,
+    }, (result) => {
+      this.downloadEnabled = Boolean(result[STORAGE_KEYS.downloadEnabled]);
+      this.slideDownloadEnabled = Boolean(result[STORAGE_KEYS.slideDownloadEnabled]);
+      if (this.hasAnyDownloadEnabled()) this.checkAndShow();
+    });
+
+    addSafeStorageChangeListener((changes, area) => {
+      if (area !== "local") return;
+      const downloadChange = changes[STORAGE_KEYS.downloadEnabled];
+      const slideDownloadChange = changes[STORAGE_KEYS.slideDownloadEnabled];
+      if (downloadChange !== undefined) {
+        this.downloadEnabled = Boolean(downloadChange.newValue);
+      }
+      if (slideDownloadChange !== undefined) {
+        this.slideDownloadEnabled = Boolean(slideDownloadChange.newValue);
+      }
+
+      if (downloadChange !== undefined || slideDownloadChange !== undefined) {
+        this.removeButton();
+        if (this.hasAnyDownloadEnabled()) {
+          this.checkAndShow();
+        }
+      }
+    });
+
+    addSafeRuntimeMessageListener((message) => {
+      if (message.type === 'ZST_VIDEO_URL_DETECTED') {
+        const didUpdate = this.applyVideoInfo(message.videoInfo);
+        if (didUpdate && this.hasAnyDownloadEnabled()) this.checkAndShow();
+      } else if (message.type === 'ZST_CONVERSION_PROGRESS') {
+        this.updateProgress(message);
+      } else if (message.type === 'ZST_SLIDE_DOWNLOAD_PROGRESS') {
+        this.updateSlideProgress(message);
+      }
+    });
+
+    this.observer = createDebouncedObserver(() => {
+      if (this.hasAnyDownloadEnabled()) this.checkAndShow();
+    }, 150);
+  }
+
+  hasAnyDownloadEnabled() {
+    return this.downloadEnabled || this.slideDownloadEnabled;
+  }
+
+  resetDownloadState() {
+    this.isDownloading = false;
+    this.activeDownloadSequence = 0;
+    this.activeConversionRequestId = null;
+  }
+
+  resetSlideDownloadState() {
+    this.isSlideDownloading = false;
+    this.activeSlideDownloadRequestId = null;
+  }
+
+  getButtonGroup() {
+    if (this.buttonGroup && document.body.contains(this.buttonGroup)) return this.buttonGroup;
+    const existingGroup = document.getElementById(ELEMENT_IDS.downloadButtonGroup);
+    this.buttonGroup = existingGroup || null;
+    return this.buttonGroup;
+  }
+
+  ensureButtonGroup(modalContent) {
+    let group = this.getButtonGroup();
+    if (group) return group;
+
+    group = document.createElement('div');
+    group.id = ELEMENT_IDS.downloadButtonGroup;
+    group.className = CSS_CLASSES.downloadButtonGroup;
+    modalContent.appendChild(group);
+    this.buttonGroup = group;
+    return group;
+  }
+
+  getDownloadButton() {
+    if (this.btn && document.body.contains(this.btn)) return this.btn;
+    const existingBtn = document.getElementById(ELEMENT_IDS.downloadButton);
+    this.btn = existingBtn || null;
+    return this.btn;
+  }
+
+  getSlideDownloadButton() {
+    if (this.slideBtn && document.body.contains(this.slideBtn)) return this.slideBtn;
+    const existingBtn = document.getElementById(ELEMENT_IDS.slideDownloadButton);
+    this.slideBtn = existingBtn || null;
+    return this.slideBtn;
+  }
+
+  setActionButtonState(button, state, text) {
+    if (!button) return;
+    button.dataset.state = state;
+    button.textContent = text;
+  }
+
+  getCurrentLessonFingerprint() {
+    const iframe = this.getModalIframe();
+    const src = iframe?.getAttribute('src') || iframe?.src || '';
+    if (!src) return '';
+
+    try {
+      const url = new URL(src, window.location.origin);
+      return `${url.pathname}${url.search}`;
+    } catch (_) {
+      return src;
+    }
+  }
+
+  syncLessonContext() {
+    const nextFingerprint = this.getCurrentLessonFingerprint();
+    if (nextFingerprint === this.activeLessonFingerprint) return false;
+
+    this.activeLessonFingerprint = nextFingerprint;
+    this.activeLessonChangedAt = nextFingerprint ? Date.now() : 0;
+    this.videoInfo = null;
+    this.resetDownloadState();
+    this.resetSlideDownloadState();
+
+    if (this.resetTimerId) {
+      clearTimeout(this.resetTimerId);
+      this.resetTimerId = null;
+    }
+
+    if (this.slideResetTimerId) {
+      clearTimeout(this.slideResetTimerId);
+      this.slideResetTimerId = null;
+    }
+
+    return true;
+  }
+
+  isVideoInfoRelevant(videoInfo) {
+    if (!videoInfo) return false;
+    if (!this.activeLessonChangedAt) return true;
+    return videoInfo.timestamp >= this.activeLessonChangedAt - 1000;
+  }
+
+  hasCurrentVideoInfo() {
+    if (!this.isVideoInfoRelevant(this.videoInfo)) {
+      this.videoInfo = null;
+      return false;
+    }
+    return true;
+  }
+
+  applyVideoInfo(videoInfo) {
+    if (!this.isVideoInfoRelevant(videoInfo)) return false;
+    this.videoInfo = videoInfo;
+    return true;
+  }
+
+  requestLatestVideoInfo() {
+    safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response, error) => {
+      if (error) return;
+      if (response && response.videoInfo && this.applyVideoInfo(response.videoInfo) && this.downloadEnabled) {
+        this.checkAndShow();
+      }
+    });
+  }
+
+  normalizeTitleText(text) {
+    if (!text) return '';
+
+    return text
+      .replace(/\s+/g, ' ')
+      .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*\/\s*\d{1,2}:\d{2}(?::\d{2})?[\s\S]*$/, '')
+      .replace(/\s+-\s+ZEN Study$/, '')
+      .replace(/\s+\|\s+N予備校$/, '')
+      .replace(/\s+-\s+N予備校$/, '')
+      .trim();
+  }
+
+  isUsableLessonTitle(text) {
+    const normalized = this.normalizeTitleText(text);
+    if (!normalized) return false;
+    if (normalized === '教材' || normalized === '動画' || normalized === 'ZEN Study') {
+      return false;
+    }
+
+    const sectionTitle = this.normalizeTitleText(this.getSectionTitle());
+    if (sectionTitle && normalized === sectionTitle) {
+      return false;
+    }
+
+    return true;
+  }
+
+  pickTitleFromNode(node) {
+    if (!node) return '';
+
+    const selectors = [
+      '[font-size="1.5rem"]',
+      '[font-size="1.6rem"]',
+      'h1 span',
+      'h1',
+      'h2 span',
+      'h2',
+      'h3 span',
+      'h3',
+      'h4 > span',
+      'h4',
+    ];
+
+    for (const selector of selectors) {
+      const el = node.querySelector(selector);
+      if (!el) continue;
+
+      const text = this.normalizeTitleText(el.textContent || '');
+      if (this.isUsableLessonTitle(text)) return text;
+    }
+
+    return '';
+  }
+
+  handlePotentialLessonSelection(event) {
+    if (!(event.target instanceof Element)) return;
+
+    const listItem = event.target.closest('ul[aria-label="必修教材リスト"] li');
+    if (!listItem) return;
+    if (!listItem.querySelector('svg[type="movie-rounded"]')) return;
+
+    const title = this.pickTitleFromNode(listItem);
+    if (!title) return;
+
+    this.lastSelectedTitle = title;
+  }
+
+  getModalIframe() {
+    return document.querySelector('.ReactModal__Content iframe[src*="/movies/"]');
+  }
+
+  hasVideoModalOpen() {
+    return this.isModalOpen() && Boolean(this.getModalIframe());
+  }
+
+  getIframeDocument(iframe) {
+    if (!iframe) return null;
+
+    try {
+      return iframe.contentDocument || iframe.contentWindow?.document || null;
+    } catch (err) {
+      console.warn('[ZenstudyTool] iframe document access failed', err);
+      return null;
+    }
+  }
+
+  extractTitleFromDocument(doc) {
+    if (!doc) return '';
+
+    const fromBody = this.pickTitleFromNode(doc.body || doc);
+    if (fromBody) return fromBody;
+
+    const metaCandidates = [
+      doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || '',
+      doc.querySelector('meta[name="twitter:title"]')?.getAttribute('content') || '',
+      doc.title || '',
+    ];
+
+    for (const candidate of metaCandidates) {
+      const title = this.normalizeTitleText(candidate);
+      if (this.isUsableLessonTitle(title)) return title;
+    }
+
+    return '';
+  }
+
+  getMovieContextFromIframe() {
+    const iframe = this.getModalIframe();
+    const src = iframe?.getAttribute('src') || iframe?.src || '';
+    if (!src) return null;
+
+    try {
+      const url = new URL(src, window.location.origin);
+      const match = url.pathname.match(/^\/(?:contents\/)?courses\/(\d+)\/chapters\/(\d+)\/movies\/(\d+)/);
+      if (!match) return null;
+
+      return {
+        courseId: match[1],
+        chapterId: match[2],
+        movieId: match[3],
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  fetchChapterData(courseId, chapterId) {
+    const cacheKey = `${courseId}:${chapterId}`;
+    if (this.chapterDataCache.has(cacheKey)) {
+      return this.chapterDataCache.get(cacheKey);
+    }
+
+    const promise = fetch(`${API_BASE_URL}/v2/material/courses/${courseId}/chapters/${chapterId}`, {
+      credentials: 'include',
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .catch((err) => {
+        console.warn('[ZenstudyTool] Chapter data fetch failed', err);
+        return null;
+      });
+
+    this.chapterDataCache.set(cacheKey, promise);
+    return promise;
+  }
+
+  findMovieTitleInValue(value, movieId) {
+    const seen = new WeakSet();
+    const queue = [value];
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current || typeof current !== 'object') continue;
+
+      if (Array.isArray(current)) {
+        for (const item of current) queue.push(item);
+        continue;
+      }
+
+      if (seen.has(current)) continue;
+      seen.add(current);
+
+      const idCandidates = [current.id, current.movie_id, current.material_id, current.resource_id]
+        .filter((candidate) => candidate !== undefined && candidate !== null)
+        .map((candidate) => String(candidate));
+      const urlCandidates = [current.url, current.href, current.path]
+        .filter((candidate) => typeof candidate === 'string');
+
+      const matchesMovie = idCandidates.includes(String(movieId))
+        || urlCandidates.some((candidate) => candidate.includes(`/movies/${movieId}`));
+
+      if (matchesMovie) {
+        const title = this.normalizeTitleText(
+          current.name
+          || current.title
+          || current.display_name
+          || current.resource_name
+          || current.label
+          || ''
+        );
+        if (this.isUsableLessonTitle(title)) return title;
+      }
+
+      for (const child of Object.values(current)) {
+        if (child && typeof child === 'object') queue.push(child);
+      }
+    }
+
+    return '';
+  }
+
+  async resolveTitle() {
+    if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
+      return this.normalizeTitleText(this.lastSelectedTitle);
+    }
+
+    const iframeDoc = this.getIframeDocument(this.getModalIframe());
+    const iframeTitle = this.extractTitleFromDocument(iframeDoc);
+    if (iframeTitle) return iframeTitle;
+
+    const movieContext = this.getMovieContextFromIframe();
+    if (movieContext) {
+      const chapterData = await this.fetchChapterData(movieContext.courseId, movieContext.chapterId);
+      const apiTitle = this.findMovieTitleInValue(chapterData?.chapter || chapterData, movieContext.movieId);
+      if (apiTitle) return apiTitle;
+    }
+
+    return this.getTitle();
+  }
+
+  pickLargestSrcsetCandidate(srcset) {
+    const candidates = String(srcset || '')
+      .split(',')
+      .map((entry) => entry.trim().split(/\s+/)[0])
+      .filter(Boolean);
+
+    return candidates.length > 0 ? candidates[candidates.length - 1] : '';
+  }
+
+  resolveAssetUrl(candidate, baseUrl) {
+    if (!candidate) return '';
+
+    try {
+      return new URL(candidate, baseUrl || window.location.href).href;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  waitForIframeDocument(iframe, timeoutMs = 4000) {
+    const existingDoc = this.getIframeDocument(iframe);
+    if (existingDoc && existingDoc.readyState !== 'loading') {
+      return Promise.resolve(existingDoc);
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+
+      const finish = (doc) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        resolve(doc || null);
+      };
+
+      const onLoad = () => {
+        finish(this.getIframeDocument(iframe));
+      };
+
+      const timeoutId = setTimeout(() => {
+        iframe.removeEventListener('load', onLoad);
+        finish(this.getIframeDocument(iframe));
+      }, timeoutMs);
+
+      iframe.addEventListener('load', onLoad, { once: true });
+    });
+  }
+
+  async collectNestedFrameDocuments(frames, seenDocs = new Set()) {
+    const docs = [];
+
+    for (const frame of frames) {
+      const doc = await this.waitForIframeDocument(frame);
+      if (!doc || seenDocs.has(doc)) continue;
+
+      seenDocs.add(doc);
+      docs.push(doc);
+
+      const childFrames = Array.from(doc.querySelectorAll('iframe'));
+      if (childFrames.length > 0) {
+        docs.push(...await this.collectNestedFrameDocuments(childFrames, seenDocs));
+      }
+    }
+
+    return docs;
+  }
+
+  async getSlideDocuments() {
+    const movieDoc = this.getIframeDocument(this.getModalIframe());
+    if (!movieDoc) return [];
+
+    const referenceFrames = Array.from(
+      movieDoc.querySelectorAll('iframe[src*="/references/"], iframe[aria-label*="補助テキスト"], iframe[aria-label*="スライド"]')
+    );
+
+    if (referenceFrames.length === 0) {
+      const fallbackFrames = Array.from(movieDoc.querySelectorAll('iframe'));
+      return fallbackFrames.length > 0
+        ? this.collectNestedFrameDocuments(fallbackFrames)
+        : [movieDoc];
+    }
+
+    return this.collectNestedFrameDocuments(referenceFrames);
+  }
+
+  isDownloadableSlideUrl(url) {
+    if (!url || /^data:/i.test(url) || /^blob:/i.test(url)) return false;
+
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  isLikelySlideImageElement(image, url) {
+    if (!this.isDownloadableSlideUrl(url)) return false;
+
+    const width = image.naturalWidth || Number.parseInt(image.getAttribute('width') || '', 10) || image.clientWidth || 0;
+    const height = image.naturalHeight || Number.parseInt(image.getAttribute('height') || '', 10) || image.clientHeight || 0;
+
+    let extension = '';
+    try {
+      const pathname = new URL(url).pathname;
+      extension = pathname.split('.').pop()?.toLowerCase() || '';
+    } catch (_) {
+      extension = '';
+    }
+
+    if (extension === 'svg' && (!width || width < 240) && (!height || height < 160)) {
+      return false;
+    }
+
+    if (width && height && (width < 240 || height < 160)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  sanitizeSlideFileStem(text) {
+    return String(text || '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[. ]+$/g, '')
+      .slice(0, 40)
+      .replace(/[. ]+$/g, '');
+  }
+
+  buildSlideFileStem(index, rawLabel = '') {
+    const prefix = `slide_${String(index + 1).padStart(3, '0')}`;
+    const label = this.sanitizeSlideFileStem(rawLabel);
+    return label ? `${prefix}_${label}` : prefix;
+  }
+
+  collectSlideImagesFromDocument(doc, images, seenUrls) {
+    const imageElements = Array.from(doc.querySelectorAll('img'));
+    let foundDirectImage = false;
+
+    for (const image of imageElements) {
+      const candidateUrl = image.currentSrc
+        || image.getAttribute('src')
+        || image.getAttribute('data-src')
+        || image.getAttribute('data-lazy-src')
+        || image.getAttribute('data-original')
+        || this.pickLargestSrcsetCandidate(image.getAttribute('srcset'))
+        || this.pickLargestSrcsetCandidate(image.getAttribute('data-srcset'));
+      const url = this.resolveAssetUrl(candidateUrl, doc.baseURI);
+
+      if (!this.isLikelySlideImageElement(image, url) || seenUrls.has(url)) {
+        continue;
+      }
+
+      const label = image.getAttribute('alt')
+        || image.getAttribute('title')
+        || image.getAttribute('aria-label')
+        || image.closest('[aria-label]')?.getAttribute('aria-label')
+        || '';
+
+      seenUrls.add(url);
+      foundDirectImage = true;
+      images.push({
+        url,
+        fileStem: this.buildSlideFileStem(images.length, label),
+      });
+    }
+
+    if (foundDirectImage) return;
+
+    const anchorElements = Array.from(doc.querySelectorAll('a[href]'));
+    for (const anchor of anchorElements) {
+      const url = this.resolveAssetUrl(anchor.getAttribute('href'), doc.baseURI);
+      if (!this.isDownloadableSlideUrl(url) || seenUrls.has(url)) continue;
+      if (!/\.(?:png|jpe?g|webp|gif|bmp)(?:[?#]|$)/i.test(url)) continue;
+
+      const label = anchor.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+      seenUrls.add(url);
+      images.push({
+        url,
+        fileStem: this.buildSlideFileStem(images.length, label),
+      });
+    }
+  }
+
+  async collectSlideImages() {
+    const docs = await this.getSlideDocuments();
+    const images = [];
+    const seenUrls = new Set();
+
+    for (const doc of docs) {
+      this.collectSlideImagesFromDocument(doc, images, seenUrls);
+    }
+
+    return images;
+  }
+
+  setButtonState(state, text) {
+    this.setActionButtonState(this.getDownloadButton(), state, text);
+  }
+
+  setSlideButtonState(state, text) {
+    this.setActionButtonState(this.getSlideDownloadButton(), state, text);
+  }
+
+  setReadyState() {
+    const btn = this.getDownloadButton();
+    if (!btn) return;
+
+    this.activeConversionRequestId = null;
+
+    if (this.hasCurrentVideoInfo()) {
+      this.stopWaitingPoll();
+      this.setButtonState('ready', DOWNLOAD_BUTTON_TEXT.ready);
+      btn.disabled = false;
+    } else {
+      this.setButtonState('waiting', DOWNLOAD_BUTTON_TEXT.waiting);
+      btn.disabled = true;
+      this.requestLatestVideoInfo();
+      this.startWaitingPoll();
+    }
+  }
+
+  startWaitingPoll() {
+    if (this.waitingPollTimerId) return;
+
+    this.waitingPollTimerId = setInterval(() => {
+      if (!this.downloadEnabled || !this.hasVideoModalOpen()) {
+        this.stopWaitingPoll();
+        return;
+      }
+
+      if (this.hasCurrentVideoInfo()) {
+        this.stopWaitingPoll();
+        this.setReadyState();
+        return;
+      }
+
+      this.requestLatestVideoInfo();
+    }, 1200);
+  }
+
+  stopWaitingPoll() {
+    if (!this.waitingPollTimerId) return;
+    clearInterval(this.waitingPollTimerId);
+    this.waitingPollTimerId = null;
+  }
+
+  setBusyState(text = DOWNLOAD_BUTTON_TEXT.preparing) {
+    const btn = this.getDownloadButton();
+    if (!btn) return;
+    this.setButtonState('loading', text);
+    btn.disabled = true;
+  }
+
+  setResultState(state, text) {
+    const btn = this.getDownloadButton();
+    if (!btn) return;
+
+    this.setButtonState(state, text);
+    btn.disabled = state !== 'error';
+
+    if (this.resetTimerId) clearTimeout(this.resetTimerId);
+    this.resetTimerId = setTimeout(() => {
+      this.setReadyState();
+    }, 2500);
+  }
+
+  setSlideReadyState() {
+    const btn = this.getSlideDownloadButton();
+    if (!btn) return;
+
+    this.setSlideButtonState('ready', SLIDE_DOWNLOAD_BUTTON_TEXT.ready);
+    btn.disabled = false;
+  }
+
+  setSlideBusyState(text = SLIDE_DOWNLOAD_BUTTON_TEXT.preparing) {
+    const btn = this.getSlideDownloadButton();
+    if (!btn) return;
+
+    this.setSlideButtonState('loading', text);
+    btn.disabled = true;
+  }
+
+  setSlideResultState(state, text) {
+    const btn = this.getSlideDownloadButton();
+    if (!btn) return;
+
+    this.setSlideButtonState(state, text);
+    btn.disabled = state !== 'error';
+
+    if (this.slideResetTimerId) clearTimeout(this.slideResetTimerId);
+    this.slideResetTimerId = setTimeout(() => {
+      this.setSlideReadyState();
+    }, 2500);
+  }
+
+  isModalOpen() {
+    return !!document.querySelector('.ReactModal__Overlay--after-open');
+  }
+
+  getTitle() {
+    if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
+      return this.normalizeTitleText(this.lastSelectedTitle);
+    }
+
+    const iframeTitle = this.extractTitleFromDocument(this.getIframeDocument(this.getModalIframe()));
+    if (iframeTitle) return iframeTitle;
+
+    const list = document.querySelector('ul[aria-label="必修教材リスト"]');
+    if (list) {
+      const activeItem = Array.from(list.children).find(li => {
+        const row = li.querySelector('div > div');
+        return !!row && (
+          row.getAttribute('aria-current') === 'true'
+          || li.getAttribute('aria-current') === 'true'
+        );
+      });
+      if (activeItem) {
+        const listTitle = this.pickTitleFromNode(activeItem);
+        if (listTitle) return listTitle;
+      }
+    }
+
+    const breadcrumbTitle = document.querySelector('nav[aria-label="パンくずリスト"] h2 span');
+    if (breadcrumbTitle && breadcrumbTitle.textContent.trim()) {
+      return this.normalizeTitleText(breadcrumbTitle.textContent);
+    }
+
+    const titleEl = document.querySelector('h1, [class*="title"]');
+    if (titleEl) return this.normalizeTitleText(titleEl.textContent);
+    return this.normalizeTitleText(document.title);
+  }
+
+  getSectionTitle() {
+    const selectors = [
+      'main h1 span',
+      'main h1',
+      'nav[aria-label="パンくずリスト"] h2 span',
+      'h1 span',
+      'h1',
+      'h2 span',
+    ];
+
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const text = (el.textContent || '').trim();
+      if (text) return text;
+    }
+
+    return '';
+  }
+
+  checkAndShow() {
+    if (!this.hasVideoModalOpen() || !this.hasAnyDownloadEnabled()) {
+      this.syncLessonContext();
+      this.removeButton();
+      return;
+    }
+
+    const lessonChanged = this.syncLessonContext();
+
+    const modalContent = document.querySelector('.ReactModal__Content');
+    if (!modalContent) return;
+
+    const buttonGroup = this.ensureButtonGroup(modalContent);
+    let btn = this.getDownloadButton();
+    let slideBtn = this.getSlideDownloadButton();
+    const hasRequiredButtons = (!this.downloadEnabled || Boolean(btn)) && (!this.slideDownloadEnabled || Boolean(slideBtn));
+    
+    if (hasRequiredButtons) {
+      const needsVideoButtonRefresh = this.downloadEnabled && (
+        lessonChanged
+        || (!this.hasCurrentVideoInfo() && btn.dataset.state !== 'waiting')
+        || (this.hasCurrentVideoInfo() && btn.dataset.state === 'waiting')
+      );
+
+      if (needsVideoButtonRefresh) {
+        this.setReadyState();
+      }
+
+      if (this.slideDownloadEnabled && lessonChanged && !this.isSlideDownloading) {
+        this.setSlideReadyState();
+      }
+
+      return;
+    }
+
+    this.title = this.getTitle();
+    this.sectionTitle = this.getSectionTitle();
+
+    if (this.downloadEnabled && !btn) {
+      this.btn = document.createElement('button');
+      btn = this.btn;
+      btn.id = ELEMENT_IDS.downloadButton;
+      btn.type = 'button';
+      btn.className = CSS_CLASSES.downloadButton;
+      btn.addEventListener('click', () => this.handleDownloadClick());
+      buttonGroup.appendChild(btn);
+    }
+
+    if (this.slideDownloadEnabled && !slideBtn) {
+      this.slideBtn = document.createElement('button');
+      slideBtn = this.slideBtn;
+      slideBtn.id = ELEMENT_IDS.slideDownloadButton;
+      slideBtn.type = 'button';
+      slideBtn.className = CSS_CLASSES.slideDownloadButton;
+      slideBtn.addEventListener('click', () => this.handleSlideDownloadClick());
+      buttonGroup.appendChild(slideBtn);
+    }
+
+    if (this.downloadEnabled) {
+      this.setReadyState();
+    }
+    if (this.slideDownloadEnabled && !this.isSlideDownloading) {
+      this.setSlideReadyState();
+    }
+  }
+
+  async startDownload() {
+    if (!this.downloadEnabled) return false;
+    if (this.isDownloading || !this.hasCurrentVideoInfo()) return false;
+
+    const btn = this.getDownloadButton();
+    if (btn && btn.disabled) return false;
+
+    const requestedVideoInfo = this.videoInfo;
+    const downloadSequence = ++this.nextDownloadSequence;
+    this.activeDownloadSequence = downloadSequence;
+    this.isDownloading = true;
+
+    try {
+      this.title = await this.resolveTitle();
+      this.sectionTitle = this.getSectionTitle();
+      this.activeConversionRequestId = null;
+    } catch (error) {
+      if (this.activeDownloadSequence === downloadSequence) {
+        this.resetDownloadState();
+        this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+      }
+      alert(`ダウンロード準備に失敗しました: ${error.message || '不明なエラー'}`);
+      return false;
+    }
+
+    if (this.activeDownloadSequence !== downloadSequence) {
+      return false;
+    }
+
+    this.setBusyState(DOWNLOAD_BUTTON_TEXT.preparing);
+
+    safeRuntimeSendMessage({
+      type: 'ZST_DOWNLOAD_VIDEO',
+      videoInfo: requestedVideoInfo,
+      title: this.title,
+      sectionTitle: this.sectionTitle,
+    }, (response, error) => {
+      const isActiveDownload = this.activeDownloadSequence === downloadSequence;
+
+      const handleFailure = (message) => {
+        if (isActiveDownload) {
+          this.resetDownloadState();
+          this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+        }
+
+        alert('ダウンロードに失敗しました: ' + message);
+      };
+
+      if (error) {
+        handleFailure(error.message || '不明なエラー');
+        return;
+      }
+
+      if (!response || !response.success) {
+        handleFailure(response?.message || '不明なエラー');
+        return;
+      }
+
+      if (!isActiveDownload) return;
+    });
+
+    return true;
+  }
+
+  handleDownloadClick() {
+    void this.startDownload();
+  }
+
+  async startSlideDownload() {
+    if (!this.slideDownloadEnabled) return false;
+    if (this.isSlideDownloading || !this.hasVideoModalOpen()) return false;
+
+    const btn = this.getSlideDownloadButton();
+    if (btn && btn.disabled) return false;
+
+    const lessonFingerprint = this.getCurrentLessonFingerprint();
+    this.isSlideDownloading = true;
+    this.activeSlideDownloadRequestId = null;
+
+    try {
+      this.title = await this.resolveTitle();
+      this.sectionTitle = this.getSectionTitle();
+
+      if (this.getCurrentLessonFingerprint() !== lessonFingerprint) {
+        this.resetSlideDownloadState();
+        return false;
+      }
+
+      this.setSlideBusyState(SLIDE_DOWNLOAD_BUTTON_TEXT.preparing);
+      const images = await this.collectSlideImages();
+
+      if (this.getCurrentLessonFingerprint() !== lessonFingerprint) {
+        this.resetSlideDownloadState();
+        return false;
+      }
+
+      if (images.length === 0) {
+        this.resetSlideDownloadState();
+        this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+        alert('スライド画像が見つかりませんでした。補助テキストが読み込まれてからもう一度お試しください。');
+        return false;
+      }
+
+      safeRuntimeSendMessage({
+        type: 'ZST_DOWNLOAD_SLIDE_IMAGES',
+        images,
+        title: this.title,
+        sectionTitle: this.sectionTitle,
+      }, (response, error) => {
+        if (error) {
+          this.resetSlideDownloadState();
+          this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+          alert('スライド保存に失敗しました: ' + (error.message || '不明なエラー'));
+          return;
+        }
+
+        if (!response || !response.success) {
+          this.resetSlideDownloadState();
+          this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+          alert('スライド保存に失敗しました: ' + (response?.message || '不明なエラー'));
+          return;
+        }
+
+        if (response.requestId && !this.activeSlideDownloadRequestId) {
+          this.activeSlideDownloadRequestId = response.requestId;
+        }
+      });
+    } catch (error) {
+      this.resetSlideDownloadState();
+      this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+      alert(`スライド保存の準備に失敗しました: ${error.message || '不明なエラー'}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  handleSlideDownloadClick() {
+    void this.startSlideDownload();
+  }
+
+  removeButton() {
+    this.stopWaitingPoll();
+    this.lastSelectedTitle = '';
+    this.resetDownloadState();
+    this.resetSlideDownloadState();
+
+    if (this.resetTimerId) {
+      clearTimeout(this.resetTimerId);
+      this.resetTimerId = null;
+    }
+
+    if (this.slideResetTimerId) {
+      clearTimeout(this.slideResetTimerId);
+      this.slideResetTimerId = null;
+    }
+
+    const existingGroup = document.getElementById(ELEMENT_IDS.downloadButtonGroup);
+    if (existingGroup) existingGroup.remove();
+    this.buttonGroup = null;
+    this.btn = null;
+    this.slideBtn = null;
+  }
+
+  updateProgress(msg) {
+    if (!this.getDownloadButton() || !this.isDownloading) return;
+
+    if (msg && msg.requestId) {
+      if (this.activeConversionRequestId && this.activeConversionRequestId !== msg.requestId) {
+        return;
+      }
+      if (!this.activeConversionRequestId && (msg.phase === 'init' || msg.phase === 'download' || msg.phase === 'save')) {
+        this.activeConversionRequestId = msg.requestId;
+      }
+    }
+    
+    if (msg.phase === 'init') {
+      this.setBusyState(DOWNLOAD_BUTTON_TEXT.preparing);
+    } else if (msg.phase === 'download') {
+      const percentage = msg.total > 0
+        ? Math.floor((msg.current / msg.total) * 100)
+        : 0;
+      this.setBusyState(`${DOWNLOAD_BUTTON_TEXT.downloading} ${percentage}%`);
+    } else if (msg.phase === 'save') {
+      if (msg.total > 0) {
+        const percentage = Math.floor((msg.current / msg.total) * 100);
+        this.setBusyState(`${DOWNLOAD_BUTTON_TEXT.saving} ${percentage}%`);
+      } else if (msg.current > 0) {
+        this.setBusyState(`${DOWNLOAD_BUTTON_TEXT.saving} ${formatByteSize(msg.current)}`);
+      } else {
+        this.setBusyState(DOWNLOAD_BUTTON_TEXT.saving);
+      }
+    } else if (msg.phase === 'done') {
+      this.resetDownloadState();
+      this.setResultState('success', DOWNLOAD_BUTTON_TEXT.success);
+    } else if (msg.phase === 'error') {
+      this.resetDownloadState();
+      this.setResultState('error', DOWNLOAD_BUTTON_TEXT.failed);
+    }
+  }
+
+  updateSlideProgress(msg) {
+    if (!this.getSlideDownloadButton() || !this.isSlideDownloading) return;
+
+    if (msg && msg.requestId) {
+      if (this.activeSlideDownloadRequestId && this.activeSlideDownloadRequestId !== msg.requestId) {
+        return;
+      }
+
+      if (!this.activeSlideDownloadRequestId && (msg.phase === 'prepare' || msg.phase === 'queue')) {
+        this.activeSlideDownloadRequestId = msg.requestId;
+      }
+    }
+
+    if (msg.phase === 'prepare') {
+      this.setSlideBusyState(SLIDE_DOWNLOAD_BUTTON_TEXT.preparing);
+      return;
+    }
+
+    if (msg.phase === 'queue') {
+      const progressText = msg.total > 0
+        ? `${SLIDE_DOWNLOAD_BUTTON_TEXT.downloading} ${Math.min(msg.current, msg.total)}/${msg.total}`
+        : SLIDE_DOWNLOAD_BUTTON_TEXT.downloading;
+      this.setSlideBusyState(progressText);
+      return;
+    }
+
+    if (msg.phase === 'done') {
+      this.resetSlideDownloadState();
+      this.setSlideResultState('success', SLIDE_DOWNLOAD_BUTTON_TEXT.success);
+      return;
+    }
+
+    if (msg.phase === 'error') {
+      this.resetSlideDownloadState();
+      this.setSlideResultState('error', SLIDE_DOWNLOAD_BUTTON_TEXT.failed);
+    }
+  }
+}

@@ -7,19 +7,58 @@
       width: 340px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       margin: 0;
-      padding: 16px;
+      padding: 0;
       background-color: #ffffff;
       color: #333333;
     }
+    .header {
+      padding: 16px 16px 8px 16px;
+      background: #f8f9fa;
+      border-bottom: 1px solid #e1e4e8;
+    }
     h2 {
-      margin: 0 0 16px 0;
-      font-size: 14px;
+      margin: 0 0 12px 0;
+      font-size: 15px;
       font-weight: 600;
       color: #222;
-      padding-bottom: 8px;
-      border-bottom: 1px solid #f0f0f0;
       letter-spacing: 0.5px;
     }
+    
+    /* タブUIのスタイル */
+    .tabs {
+      display: flex;
+      gap: 2px;
+    }
+    .tab-btn {
+      flex: 1;
+      background: none;
+      border: none;
+      padding: 8px 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .tab-btn:hover {
+      color: #0077d3;
+      background: rgba(0, 119, 211, 0.05);
+    }
+    .tab-btn.active {
+      color: #0077d3;
+      border-bottom-color: #0077d3;
+    }
+
+    .tab-content {
+      display: none;
+      padding: 16px;
+    }
+    .tab-content.active {
+      display: block;
+    }
+
     .setting-item {
       display: flex;
       justify-content: space-between;
@@ -40,9 +79,9 @@
       color: #444;
     }
     .panel {
-      margin-top: 18px;
-      padding-top: 14px;
-      border-top: 1px solid #f0f0f0;
+      margin-top: 0;
+      padding-top: 0;
+      border-top: none;
     }
     .panel-title {
       margin: 0 0 8px 0;
@@ -183,119 +222,213 @@
     input:checked + .slider:before {
       transform: translateX(18px);
     }
+    /* ダークモード対応 */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #1e1e1e;
+        color: #e0e0e0;
+      }
+      .header {
+        background: #252526;
+        border-bottom-color: #333;
+      }
+      h2 {
+        color: #eee;
+      }
+      .tab-btn {
+        color: #aaa;
+      }
+      .tab-btn:hover {
+        color: #4daafc;
+        background: rgba(77, 170, 252, 0.1);
+      }
+      .tab-btn.active {
+        color: #4daafc;
+        border-bottom-color: #4daafc;
+      }
+      .setting-desc {
+        color: #888;
+      }
+      .setting-label {
+        color: #ddd;
+      }
+      .panel-title {
+        color: #eee;
+      }
+      .panel-copy {
+        color: #bbb;
+      }
+      .ai-label {
+        color: #ccc;
+      }
+      .ai-select, .api-key-input {
+        background-color: #2d2d30;
+        border-color: #444;
+        color: #eee;
+      }
+      .ai-select:focus, .api-key-input:focus {
+        border-color: #4daafc;
+        box-shadow: 0 0 0 3px rgba(77, 170, 252, 0.2);
+      }
+      .ai-select:disabled {
+        color: #666;
+        background-color: #252526;
+        border-color: #333;
+      }
+      .api-key-save {
+        background-color: #0077d3;
+      }
+      .api-key-save:hover {
+        background-color: #4daafc;
+        color: #111;
+      }
+      .api-key-status {
+        color: #bbb;
+      }
+      .api-key-link {
+        color: #4daafc;
+      }
+      .slider {
+        background-color: #39393d;
+      }
+      .slider:before {
+        background-color: #ccc;
+      }
+      input:checked + .slider {
+        background-color: #34c759;
+      }
+      input:checked + .slider:before {
+        background-color: #fff;
+      }
+    }
   </style>
 </head>
 <body>
-  <h2>設定</h2>
-  
-  <div class="setting-item">
-    <span class="setting-label">必修教材のみを強制</span>
-    <label class="switch">
-      <input type="checkbox" id="toggleFilter">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="setting-item">
-    <span class="setting-label">合計時間の表示</span>
-    <label class="switch">
-      <input type="checkbox" id="toggleTime">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="setting-item">
-    <div>
-      <span class="setting-label">1日あたりの授業時間表示</span>
+  <div class="header">
+    <h2>ZenstudyTool 設定</h2>
+    <div class="tabs">
+      <button class="tab-btn active" data-target="tab-general">基本</button>
+      <button class="tab-btn" data-target="tab-ai">AI</button>
+      <button class="tab-btn" data-target="tab-download">DL</button>
+      <button class="tab-btn" data-target="tab-stats">統計</button>
     </div>
-    <label class="switch">
-      <input type="checkbox" id="toggleDailyTarget">
-      <span class="slider"></span>
-    </label>
   </div>
 
-  <div class="setting-item">
-    <div>
-      <span class="setting-label">教材の自動再生</span>
-    </div>
-    <label class="switch">
-      <input type="checkbox" id="toggleAutoSkip">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="setting-item">
-    <div>
-      <span class="setting-label">バックグラウンド再生</span>
-    </div>
-    <label class="switch">
-      <input type="checkbox" id="toggleAlwaysFocus">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="setting-item">
-    <div>
-      <span class="setting-label">問題文のコピー</span>
-    </div>
-    <label class="switch">
-      <input type="checkbox" id="toggleCopyText">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="setting-item">
-    <div>
-      <span class="setting-label">動画のダウンロード</span>
-    </div>
-    <label class="switch">
-      <input type="checkbox" id="toggleDownload">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="setting-item">
-    <div>
-      <span class="setting-label">スライド画像の一括保存</span>
-    </div>
-    <label class="switch">
-      <input type="checkbox" id="toggleSlideDownload">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <section class="panel">
-    <h3 class="panel-title">AI文章校正</h3>
+  <div class="tab-content active" id="tab-general">
     <div class="setting-item">
-      <div>
-        <span class="setting-label">AI文章校正を有効化</span>
-      </div>
+      <span class="setting-label">必修教材のみを強制</span>
       <label class="switch">
-        <input type="checkbox" id="toggleProofread">
+        <input type="checkbox" id="toggleFilter">
         <span class="slider"></span>
       </label>
     </div>
-    <p class="panel-copy">レポートや論述の入力内容を AI で校正します。自動選択では対応モデルを順番に試し、失敗時は次のモデルへフォールバックします。</p>
-    <div class="ai-field">
-      <label for="geminiModelMode" class="ai-label">モデルモード</label>
-      <select id="geminiModelMode" class="ai-select">
-        <option value="auto">自動選択</option>
-        <option value="manual">手動指定</option>
-      </select>
+
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">教材の自動再生</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleAutoSkip">
+        <span class="slider"></span>
+      </label>
     </div>
-    <div class="ai-field">
-      <label for="geminiSelectedModel" class="ai-label">使用モデル</label>
-      <select id="geminiSelectedModel" class="ai-select"></select>
+
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">バックグラウンド再生</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleAlwaysFocus">
+        <span class="slider"></span>
+      </label>
     </div>
-    <div class="api-key-row">
-      <input type="password" id="geminiApiKey" class="api-key-input" placeholder="Gemini APIキー">
-      <button type="button" id="saveGeminiApiKey" class="api-key-save">保存</button>
+
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">問題文のコピー</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleCopyText">
+        <span class="slider"></span>
+      </label>
     </div>
-    <div class="api-key-meta">
-      <div id="geminiApiKeyStatus" class="api-key-status"></div>
-      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="api-key-link">APIキー取得</a>
+  </div>
+
+  <div class="tab-content" id="tab-ai">
+    <section class="panel">
+      <div class="setting-item">
+        <div>
+          <span class="setting-label">AI文章校正を有効化</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleProofread">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <p class="panel-copy">レポートや論述の入力内容を AI で校正します。自動選択では対応モデルを順番に試し、失敗時は次のモデルへフォールバックします。</p>
+      <div class="ai-field">
+        <label for="geminiModelMode" class="ai-label">モデルモード</label>
+        <select id="geminiModelMode" class="ai-select">
+          <option value="auto">自動選択</option>
+          <option value="manual">手動指定</option>
+        </select>
+      </div>
+      <div class="ai-field">
+        <label for="geminiSelectedModel" class="ai-label">使用モデル</label>
+        <select id="geminiSelectedModel" class="ai-select"></select>
+      </div>
+      <div class="api-key-row">
+        <input type="password" id="geminiApiKey" class="api-key-input" placeholder="Gemini APIキー">
+        <button type="button" id="saveGeminiApiKey" class="api-key-save">保存</button>
+      </div>
+      <div class="api-key-meta">
+        <div id="geminiApiKeyStatus" class="api-key-status"></div>
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="api-key-link">APIキー取得</a>
+      </div>
+    </section>
+  </div>
+
+  <div class="tab-content" id="tab-download">
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">動画のダウンロード</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleDownload">
+        <span class="slider"></span>
+      </label>
     </div>
-  </section>
+
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">スライド画像の一括保存</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleSlideDownload">
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-stats">
+    <div class="setting-item">
+      <span class="setting-label">合計時間の表示</span>
+      <label class="switch">
+        <input type="checkbox" id="toggleTime">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="setting-item">
+      <div>
+        <span class="setting-label">1日あたりの授業時間表示</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggleDailyTarget">
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>
