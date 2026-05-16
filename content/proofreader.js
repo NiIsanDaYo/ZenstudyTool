@@ -340,7 +340,7 @@ class ZenstudyToolProofreader {
   tokenize(text) {
     try {
       if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-        const segmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+        const segmenter = new Intl.Segmenter('ja', { granularity: 'grapheme' });
         return Array.from(segmenter.segment(text)).map(s => s.segment);
       }
     } catch (e) {
@@ -352,31 +352,61 @@ class ZenstudyToolProofreader {
   computeMyersDiff(str1, str2) {
     const a = this.tokenize(str1);
     const b = this.tokenize(str2);
-    const n = a.length, m = b.length, max = n + m, v = new Int32Array(2 * max + 1), trace = [];
+
+    let prefixCount = 0;
+    while (prefixCount < a.length && prefixCount < b.length && a[prefixCount] === b[prefixCount]) {
+      prefixCount++;
+    }
+
+    let suffixCount = 0;
+    while (suffixCount < (a.length - prefixCount) && suffixCount < (b.length - prefixCount) && a[a.length - 1 - suffixCount] === b[b.length - 1 - suffixCount]) {
+      suffixCount++;
+    }
+
+    const subA = a.slice(prefixCount, a.length - suffixCount);
+    const subB = b.slice(prefixCount, b.length - suffixCount);
+
+    const prefixDiff = a.slice(0, prefixCount).map(text => ({ type: 'equal', text }));
+    const suffixDiff = a.slice(a.length - suffixCount).map(text => ({ type: 'equal', text }));
+
+    if (subA.length === 0 && subB.length === 0) {
+      return [...prefixDiff, ...suffixDiff];
+    }
+
+    const n = subA.length, m = subB.length, max = n + m, v = new Int32Array(2 * max + 1), trace = [];
     v[max + 1] = 0;
+    
+    let subDiff = [];
+    let found = false;
     for (let d = 0; d <= max; d++) {
-      const vLine = new Int32Array(v); trace.push(vLine);
       for (let k = -d; k <= d; k += 2) {
         let x = (k === -d || (k !== d && v[max + k - 1] < v[max + k + 1])) ? v[max + k + 1] : v[max + k - 1] + 1;
         let y = x - k;
-        while (x < n && y < m && a[x] === b[y]) { x++; y++; }
+        while (x < n && y < m && subA[x] === subB[y]) { x++; y++; }
         v[max + k] = x;
         if (x >= n && y >= m) {
-          const diff = []; let currX = n, currY = m;
+          trace.push(new Int32Array(v)); // 保存してからバックトレース
+          let currX = n, currY = m;
           for (let dStep = d; dStep > 0; dStep--) {
-            const vStep = trace[dStep - 1], kStep = currX - currY;
+            const vStep = trace[dStep - 1];
+            const kStep = currX - currY;
             const prevK = (kStep === -dStep || (kStep !== dStep && vStep[max + kStep - 1] < vStep[max + kStep + 1])) ? kStep + 1 : kStep - 1;
             const prevX = vStep[max + prevK], prevY = prevX - prevK;
-            while (currX > prevX && currY > prevY) { diff.push({ type: 'equal', text: a[currX - 1] }); currX--; currY--; }
-            if (currX > prevX) { diff.push({ type: 'removed', text: a[currX - 1] }); currX--; }
-            else if (currY > prevY) { diff.push({ type: 'added', text: b[currY - 1] }); currY--; }
+            while (currX > prevX && currY > prevY) { subDiff.push({ type: 'equal', text: subA[currX - 1] }); currX--; currY--; }
+            if (currX > prevX) { subDiff.push({ type: 'removed', text: subA[currX - 1] }); currX--; }
+            else if (currY > prevY) { subDiff.push({ type: 'added', text: subB[currY - 1] }); currY--; }
           }
-          while (currX > 0 && currY > 0) { diff.push({ type: 'equal', text: a[currX - 1] }); currX--; currY--; }
-          return diff.reverse();
+          while (currX > 0 && currY > 0) { subDiff.push({ type: 'equal', text: subA[currX - 1] }); currX--; currY--; }
+          subDiff.reverse();
+          found = true;
+          break;
         }
       }
+      if (found) break;
+      trace.push(new Int32Array(v));
     }
-    return [];
+
+    return [...prefixDiff, ...subDiff, ...suffixDiff];
   }
 
   showDiff(field, oldStr, newStr) {
@@ -384,7 +414,7 @@ class ZenstudyToolProofreader {
     const diffView = document.createElement('div');
     diffView.className = 'zst-proofread-diff';
     Object.assign(diffView.style, {
-      marginTop: '10px',
+      marginTop: '12px',
       padding: '12px',
       border: '1px solid #d1d5da',
       borderRadius: '6px',
@@ -392,7 +422,7 @@ class ZenstudyToolProofreader {
       fontSize: '13px',
       lineHeight: '1.6',
       whiteSpace: 'pre-wrap',
-      wordBreak: 'break-all',
+      wordBreak: 'break-word',
       color: '#24292e'
     });
     const diff = this.computeMyersDiff(oldStr, newStr);
