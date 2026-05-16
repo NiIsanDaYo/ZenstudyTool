@@ -337,7 +337,21 @@ class ZenstudyToolProofreader {
     this.setProofreadButtonState(button, FIELD_PROOFREAD_BUTTON_TEXT.ready, 'default', false, this.getProofreadButtonTitle(false));
   }
 
-  computeMyersDiff(a, b) {
+  tokenize(text) {
+    try {
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        const segmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+        return Array.from(segmenter.segment(text)).map(s => s.segment);
+      }
+    } catch (e) {
+      console.warn('[ZenstudyTool] Intl.Segmenter failed', e);
+    }
+    return Array.from(text);
+  }
+
+  computeMyersDiff(str1, str2) {
+    const a = this.tokenize(str1);
+    const b = this.tokenize(str2);
     const n = a.length, m = b.length, max = n + m, v = new Int32Array(2 * max + 1), trace = [];
     v[max + 1] = 0;
     for (let d = 0; d <= max; d++) {
@@ -369,18 +383,39 @@ class ZenstudyToolProofreader {
     this.removeDiff(field);
     const diffView = document.createElement('div');
     diffView.className = 'zst-proofread-diff';
-    Object.assign(diffView.style, { marginTop: '8px', padding: '12px', border: '1px solid #e1e4e8', borderRadius: '6px', backgroundColor: '#f6f8fa', fontSize: '13px', lineHeight: '1.6', whiteSpace: 'pre-wrap', wordBreak: 'break-word' });
+    Object.assign(diffView.style, {
+      marginTop: '10px',
+      padding: '12px',
+      border: '1px solid #d1d5da',
+      borderRadius: '6px',
+      backgroundColor: '#fafbfc',
+      fontSize: '13px',
+      lineHeight: '1.6',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-all',
+      color: '#24292e'
+    });
     const diff = this.computeMyersDiff(oldStr, newStr);
     let html = '', currentType = null, currentText = '';
     const commit = () => {
-      if (!currentType) return;
+      if (currentType === null) return;
       const escaped = currentText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      if (currentType === 'equal') html += `<span>${escaped}</span>`;
-      else if (currentType === 'added') html += `<ins style="background-color:#e6ffed;text-decoration:none;color:#22863a;font-weight:bold;">${escaped}</ins>`;
-      else if (currentType === 'removed') html += `<del style="background-color:#ffeef0;text-decoration:line-through;color:#cb2431;">${escaped}</del>`;
+      if (currentType === 'equal') {
+        html += `<span>${escaped}</span>`;
+      } else if (currentType === 'added') {
+        html += `<ins style="background-color:#ccffd8;text-decoration:none;color:#116329;padding:0 2px;border-radius:2px;font-weight:600;">${escaped}</ins>`;
+      } else if (currentType === 'removed') {
+        html += `<del style="background-color:#ffe3e6;text-decoration:line-through;color:#b31d28;padding:0 2px;border-radius:2px;">${escaped}</del>`;
+      }
       currentText = '';
     };
-    for (const op of diff) { if (op.type !== currentType) { commit(); currentType = op.type; } currentText += op.text; }
+    for (const op of diff) {
+      if (op.type !== currentType) {
+        commit();
+        currentType = op.type;
+      }
+      currentText += op.text;
+    }
     commit();
     diffView.innerHTML = html;
     field.parentNode.insertBefore(diffView, field.nextSibling);
