@@ -25,6 +25,12 @@ class ZenstudyToolCopyText {
     // evaluation_tests, reports, essay_tests の iframe があるか
     const iframe = document.querySelector(ACTION_IFRAME_SELECTOR);
     if (this.enabled && iframe) {
+      if (!iframe.dataset.zstCopyTextBound) {
+        iframe.dataset.zstCopyTextBound = 'true';
+        iframe.addEventListener('load', () => {
+          this.showButton(iframe);
+        });
+      }
       this.showButton(iframe);
     } else {
       this.hideButton(iframe);

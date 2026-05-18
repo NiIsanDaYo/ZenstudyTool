@@ -151,7 +151,9 @@ class ZenstudyToolTimeLogic {
     for (const movie of movies) {
       const length = movie.length || 0;
       const comprehension = movie.progress?.comprehension || {};
-      const passed = comprehension.good === comprehension.limit;
+      const good = Number(comprehension.good);
+      const limit = Number(comprehension.limit);
+      const passed = Number.isFinite(good) && Number.isFinite(limit) && limit > 0 && good >= limit;
       goal += length;
       if (passed) current += length;
     }

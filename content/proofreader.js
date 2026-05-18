@@ -84,6 +84,12 @@ class ZenstudyToolProofreader {
     const evaluateButtonWrapper = iframeDoc.querySelector('.evaluate-button');
     if (!evaluateButtonWrapper) return;
 
+    const proofreadFields = this.getVisibleProofreadFields(iframeDoc);
+    if (proofreadFields.length === 0) {
+      this.hideButton(iframe);
+      return;
+    }
+
     evaluateButtonWrapper.classList.add(CSS_CLASSES.actionRow);
 
     let button = iframeDoc.getElementById(ELEMENT_IDS.proofreadButton);
@@ -101,7 +107,7 @@ class ZenstudyToolProofreader {
     }
 
     this.btn = button;
-    this.ensureFieldProofreadButtons(iframe, iframeDoc);
+    this.ensureFieldProofreadButtons(iframe, iframeDoc, proofreadFields);
     this.updateReadyButton(iframeDoc);
   }
 
@@ -123,7 +129,7 @@ class ZenstudyToolProofreader {
             if (!parent) return;
 
             row
-              .querySelectorAll(PROOFREAD_FIELD_SELECTOR)
+              .querySelectorAll('textarea, input[type="text"], input[type="search"]')
               .forEach((field) => {
                 field.classList.remove('zst-proofreading-field');
                 parent.insertBefore(field, row);
@@ -132,7 +138,7 @@ class ZenstudyToolProofreader {
             row.remove();
           });
         iframeDoc
-          .querySelectorAll(PROOFREAD_FIELD_SELECTOR)
+          .querySelectorAll('textarea, input[type="text"], input[type="search"]')
           .forEach((field) => field.removeAttribute('data-zst-proofread-bound'));
       }
     }
@@ -256,14 +262,14 @@ class ZenstudyToolProofreader {
     return { element: field, value, context: this.collectFieldContext(field) };
   }
 
-  ensureFieldProofreadButtons(iframe, iframeDoc) {
-    this.getVisibleProofreadFields(iframeDoc).forEach((field) => {
+  ensureFieldProofreadButtons(iframe, iframeDoc, fields = this.getVisibleProofreadFields(iframeDoc)) {
+    fields.forEach((field) => {
       if (field.dataset.zstProofreadBound === 'true') return;
       const fieldParent = field.parentNode;
       if (!fieldParent) return;
 
       const row = iframeDoc.createElement('div');
-      row.className = `${CSS_CLASSES.fieldProofreadRow} ${field.tagName === 'TEXTAREA' ? CSS_CLASSES.fieldProofreadRowTextarea : CSS_CLASSES.fieldProofreadRowSingleline}`;
+      row.className = `${CSS_CLASSES.fieldProofreadRow} ${CSS_CLASSES.fieldProofreadRowTextarea}`;
       const actionRow = iframeDoc.createElement('div');
       actionRow.className = CSS_CLASSES.fieldProofreadActions;
       const button = iframeDoc.createElement('button');

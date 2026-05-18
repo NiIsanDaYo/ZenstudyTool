@@ -26,14 +26,18 @@ const CSS_CLASSES = {
   actionRow: "__ZENSTUDYTOOL_actionRow",
   footerActionButton: "__ZENSTUDYTOOL_footerActionButton",
   fieldProofreadRow: "__ZENSTUDYTOOL_fieldProofreadRow",
-  fieldProofreadRowSingleline: "__ZENSTUDYTOOL_fieldProofreadRowSingleline",
   fieldProofreadRowTextarea: "__ZENSTUDYTOOL_fieldProofreadRowTextarea",
   fieldProofreadActions: "__ZENSTUDYTOOL_fieldProofreadActions",
   fieldProofreadButton: "__ZENSTUDYTOOL_fieldProofreadButton",
 };
 
-const ACTION_IFRAME_SELECTOR = 'iframe[src*="evaluation_tests"], iframe[src*="reports"], iframe[src*="essay_tests"]';
-const PROOFREAD_FIELD_SELECTOR = 'textarea:not([disabled]):not([readonly]), input[type="text"]:not([disabled]):not([readonly]), input[type="search"]:not([disabled]):not([readonly])';
+const ACTION_IFRAME_SELECTOR = [
+  'iframe[src*="/evaluation_tests/"]',
+  'iframe[src*="/essay_tests/"]',
+  'iframe[src*="/essay_reports/"]',
+  'iframe[src*="/reports/"]',
+].join(', ');
+const PROOFREAD_FIELD_SELECTOR = 'textarea:not([disabled]):not([readonly])';
 
 /** DOM要素ID */
 const ELEMENT_IDS = {

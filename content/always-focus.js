@@ -45,10 +45,22 @@ class ZenstudyToolAlwaysFocus {
     this.removePlayListener();
   }
 
+  shouldResumeVideo() {
+    if (!this.enabled) return false;
+    if (document.hidden || !document.hasFocus()) return true;
+
+    try {
+      const topDocument = window.top?.document;
+      return Boolean(topDocument && (topDocument.hidden || !topDocument.hasFocus()));
+    } catch (_) {
+      return false;
+    }
+  }
+
   playVideo = (event) => {
     const video = event.target;
-    // 動画が完全に終わっている(video.ended)時以外は強制再開する
-    if (this.enabled && !video.ended) {
+    // 動画が完全に終わっている(video.ended)時以外は、非アクティブ化に伴う停止だけ再開する
+    if (!video.ended && this.shouldResumeVideo()) {
       video.play().catch((e) => console.warn('[ZenstudyTool] Auto-play failed', e));
       console.log('[ZenstudyTool] 自動的に動画を再開（バックグラウンド再生）');
     }

@@ -112,17 +112,10 @@
   width: 100%;
 }
 
-.__ZENSTUDYTOOL_fieldProofreadRow > textarea,
-.__ZENSTUDYTOOL_fieldProofreadRow > input[type="text"],
-.__ZENSTUDYTOOL_fieldProofreadRow > input[type="search"] {
+.__ZENSTUDYTOOL_fieldProofreadRow > textarea {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-}
-
-.__ZENSTUDYTOOL_fieldProofreadRowSingleline > input[type="text"],
-.__ZENSTUDYTOOL_fieldProofreadRowSingleline > input[type="search"] {
-  padding-right: 96px !important;
 }
 
 .__ZENSTUDYTOOL_fieldProofreadRowTextarea > textarea {
@@ -134,11 +127,6 @@
   right: 10px;
   z-index: 1;
   display: flex;
-}
-
-.__ZENSTUDYTOOL_fieldProofreadRowSingleline .__ZENSTUDYTOOL_fieldProofreadActions {
-  top: 50%;
-  transform: translateY(-50%);
 }
 
 .__ZENSTUDYTOOL_fieldProofreadRowTextarea .__ZENSTUDYTOOL_fieldProofreadActions {
