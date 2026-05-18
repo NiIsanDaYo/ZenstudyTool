@@ -3,6 +3,8 @@ class ZenstudyToolAnswerAssist {
     this.hintSequence = 0;
     this.boundIframes = new WeakSet();
     this.boundFields = new WeakSet();
+    this.observedIframeDocument = null;
+    this.iframeDocumentObserver = null;
     this.observer = createDebouncedObserver(() => this.checkIframe(), 500);
 
     this.checkIframe();
@@ -24,9 +26,23 @@ class ZenstudyToolAnswerAssist {
     return getAccessibleIframeDocument(iframe);
   }
 
+  watchIframeDocument(iframe, iframeDoc) {
+    if (!iframeDoc || this.observedIframeDocument === iframeDoc) return;
+    if (this.iframeDocumentObserver) this.iframeDocumentObserver.disconnect();
+
+    this.observedIframeDocument = iframeDoc;
+    this.iframeDocumentObserver = createDebouncedRootObserver(
+      iframeDoc.documentElement || iframeDoc.body,
+      () => this.refreshFields(iframe),
+      200,
+      true
+    );
+  }
+
   refreshFields(iframe) {
     const iframeDoc = this.getIframeDocument(iframe);
     if (!iframeDoc) return;
+    this.watchIframeDocument(iframe, iframeDoc);
 
     const fields = Array.from(iframeDoc.querySelectorAll(ANSWER_TEXTAREA_SELECTOR))
       .filter((field) => field.getClientRects().length > 0);
@@ -191,40 +207,46 @@ class ZenstudyToolAnswerAssist {
     const container = field.closest("li.exercise-item, .exercise-item, .answer-area") || field.closest("section.exercise");
     if (!container) return false;
 
+    const syncCandidates = () => {
+      const candidates = this.findNativeOverLimitWarnings(container);
+      for (const candidate of candidates) {
+        if (!expectedText) {
+          candidate.textContent = "";
+          candidate.hidden = true;
+          candidate.style.display = "none";
+          continue;
+        }
+
+        candidate.hidden = false;
+        candidate.style.display = "";
+        if (this.normalizeText(candidate.textContent || "") !== expectedText) {
+          candidate.textContent = expectedText;
+        }
+      }
+
+      if (expectedText && candidates.length > 0) {
+        this.hideBadge(field);
+      }
+
+      return candidates.length;
+    };
+
+    const initialCount = syncCandidates();
+    window.setTimeout(syncCandidates, 0);
+    window.setTimeout(syncCandidates, 80);
+
+    return initialCount > 0;
+  }
+
+  findNativeOverLimitWarnings(container) {
     const candidates = Array.from(container.querySelectorAll("*"))
       .filter((el) => {
+        if (el.classList?.contains(CSS_CLASSES.answerLengthBadge)) return false;
         const text = this.normalizeText(el.textContent || "");
         return /^\d{1,5}文字オーバー$/.test(text);
       });
 
-    for (const candidate of candidates) {
-      if (!expectedText) {
-        candidate.textContent = "";
-        candidate.hidden = true;
-        candidate.style.display = "none";
-        continue;
-      }
-
-      candidate.hidden = false;
-      candidate.style.display = "";
-      if (this.normalizeText(candidate.textContent || "") !== expectedText) {
-        candidate.textContent = expectedText;
-      }
-    }
-
-    if (expectedText) {
-      window.setTimeout(() => {
-        for (const candidate of candidates) {
-          candidate.hidden = false;
-          candidate.style.display = "";
-          if (this.normalizeText(candidate.textContent || "") !== expectedText) {
-            candidate.textContent = expectedText;
-          }
-        }
-      }, 0);
-    }
-
-    return candidates.length > 0;
+    return candidates;
   }
 
   findCounterElement(field) {

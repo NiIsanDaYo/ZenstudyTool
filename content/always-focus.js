@@ -62,7 +62,6 @@ class ZenstudyToolAlwaysFocus {
     // 動画が完全に終わっている(video.ended)時以外は、非アクティブ化に伴う停止だけ再開する
     if (!video.ended && this.shouldResumeVideo()) {
       video.play().catch((e) => console.warn('[ZenstudyTool] Auto-play failed', e));
-      console.log('[ZenstudyTool] 自動的に動画を再開（バックグラウンド再生）');
     }
   }
 

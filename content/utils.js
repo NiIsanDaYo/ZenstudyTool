@@ -201,7 +201,9 @@ const calculateDailyTarget = (remainingSeconds, deadlineDate) => {
  * @param {number}   delayMs   - デバウンス間隔
  * @returns {MutationObserver}
  */
-const createDebouncedObserver = (callback, delayMs = DEBOUNCE_MS, observeAttributes = false) => {
+const createDebouncedRootObserver = (root, callback, delayMs = DEBOUNCE_MS, observeAttributes = false) => {
+  if (!root) return null;
+
   let timeoutId = null;
   const observer = new MutationObserver(() => {
     if (timeoutId) clearTimeout(timeoutId);
@@ -209,9 +211,21 @@ const createDebouncedObserver = (callback, delayMs = DEBOUNCE_MS, observeAttribu
   });
   const config = { childList: true, subtree: true };
   if (observeAttributes) config.attributes = true;
-  observer.observe(document.body, config);
+  observer.observe(root, config);
+  const disconnect = observer.disconnect.bind(observer);
+  observer.disconnect = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    disconnect();
+  };
   return observer;
 };
+
+const createDebouncedObserver = (callback, delayMs = DEBOUNCE_MS, observeAttributes = false) => (
+  createDebouncedRootObserver(document.body, callback, delayMs, observeAttributes)
+);
 
 const getAccessibleIframeDocument = (iframe) => {
   if (!iframe) return null;
@@ -222,6 +236,25 @@ const getAccessibleIframeDocument = (iframe) => {
     console.warn('[ZenstudyTool] iframe document access failed', err);
     return null;
   }
+};
+
+const normalizeButtonLabel = (element) => String(
+  element?.textContent
+  || element?.value
+  || element?.getAttribute?.("aria-label")
+  || ""
+).replace(/\s+/g, " ").trim();
+
+const findActionButtonWrapper = (doc) => {
+  const explicitWrapper = doc?.querySelector?.(".evaluate-button");
+  if (explicitWrapper) return explicitWrapper;
+
+  const actionLabels = new Set(["答え合わせ", "提出", "再受講する"]);
+  const actionButton = Array.from(
+    doc?.querySelectorAll?.('button, a[role="button"], input[type="button"], input[type="submit"]') || []
+  ).find((element) => actionLabels.has(normalizeButtonLabel(element)));
+
+  return actionButton?.parentElement || null;
 };
 
 /**

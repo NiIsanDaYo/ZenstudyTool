@@ -1,8 +1,12 @@
 const ACTION_IFRAME_SRC_PATHS = Object.freeze([
   "/evaluation_tests/",
+  "/evaluation_test/",
   "/evaluation_reports/",
+  "/evaluation_report/",
   "/essay_tests/",
+  "/essay_test/",
   "/essay_reports/",
+  "/essay_report/",
   "/reports/",
 ]);
 

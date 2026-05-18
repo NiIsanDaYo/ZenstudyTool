@@ -2,6 +2,8 @@ class ZenstudyToolCopyText {
   constructor() {
     this.enabled = true;
     this.btn = null;
+    this.observedIframeDocument = null;
+    this.iframeDocumentObserver = null;
     this.observer = createDebouncedObserver(() => this.checkIframe(), 500);
     
     // ストレージから初期状態を読み込み
@@ -41,12 +43,25 @@ class ZenstudyToolCopyText {
     return getAccessibleIframeDocument(iframe);
   }
 
+  watchIframeDocument(iframe, iframeDoc) {
+    if (!iframeDoc || this.observedIframeDocument === iframeDoc) return;
+    if (this.iframeDocumentObserver) this.iframeDocumentObserver.disconnect();
+
+    this.observedIframeDocument = iframeDoc;
+    this.iframeDocumentObserver = createDebouncedRootObserver(
+      iframeDoc.documentElement || iframeDoc.body,
+      () => this.showButton(iframe),
+      200
+    );
+  }
+
   showButton(iframe) {
     const iframeDoc = this.getIframeDocument(iframe);
     if (!iframeDoc) return;
+    this.watchIframeDocument(iframe, iframeDoc);
 
     // フッターのボタンラッパーを探す
-    const evaluateButtonWrapper = iframeDoc.querySelector('.evaluate-button');
+    const evaluateButtonWrapper = findActionButtonWrapper(iframeDoc);
     if (!evaluateButtonWrapper) return;
 
     evaluateButtonWrapper.classList.add(CSS_CLASSES.actionRow);
@@ -64,9 +79,10 @@ class ZenstudyToolCopyText {
     
     // ZEN Studyの既存の「答え合わせ」「再受講する」と同じボタンデザインを拝借する
     this.btn.className = `u-button type-primary-light ${CSS_CLASSES.footerActionButton}`;
-    this.btn.innerHTML = '問題文をコピー';
+    this.btn.textContent = '問題文をコピー';
     
-    this.btn.addEventListener('click', async () => {
+    const button = this.btn;
+    button.addEventListener('click', async () => {
       try {
         const text = await this.extractText(iframe);
         if (!text) {
@@ -77,20 +93,20 @@ class ZenstudyToolCopyText {
         await window.top.navigator.clipboard.writeText(text);
         
         // 成功時の見た目変更
-        const originalText = this.btn.innerHTML;
-        this.btn.innerHTML = 'コピー完了！';
+        const originalText = button.textContent;
+        button.textContent = 'コピー完了！';
         
         // 成功を伝えるために一時的に緑色に変更
-        this.btn.style.backgroundColor = '#00c541';
-        this.btn.style.color = '#fff';
-        this.btn.style.borderColor = '#00c541';
+        button.style.backgroundColor = '#00c541';
+        button.style.color = '#fff';
+        button.style.borderColor = '#00c541';
 
         setTimeout(() => {
-          if (iframeDoc.getElementById(ELEMENT_IDS.copyButton)) {
-            this.btn.innerHTML = originalText;
-            this.btn.style.backgroundColor = '';
-            this.btn.style.color = '';
-            this.btn.style.borderColor = '';
+          if (iframeDoc.getElementById(ELEMENT_IDS.copyButton) === button) {
+            button.textContent = originalText;
+            button.style.backgroundColor = '';
+            button.style.color = '';
+            button.style.borderColor = '';
           }
         }, 2000);
       } catch (err) {
@@ -103,6 +119,12 @@ class ZenstudyToolCopyText {
   }
 
   hideButton(iframe) {
+    if (this.iframeDocumentObserver) {
+      this.iframeDocumentObserver.disconnect();
+      this.iframeDocumentObserver = null;
+      this.observedIframeDocument = null;
+    }
+
     if (this.btn && this.btn.parentNode) {
       this.btn.parentNode.removeChild(this.btn);
     }

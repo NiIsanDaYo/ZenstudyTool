@@ -91,14 +91,14 @@ class ZenstudyToolDownloader {
     return this.buttonGroup;
   }
 
-  ensureButtonGroup(modalContent) {
+  ensureButtonGroup(buttonHost) {
     let group = this.getButtonGroup();
     if (group) return group;
 
     group = document.createElement('div');
     group.id = ELEMENT_IDS.downloadButtonGroup;
     group.className = CSS_CLASSES.downloadButtonGroup;
-    modalContent.appendChild(group);
+    buttonHost.appendChild(group);
     this.buttonGroup = group;
     return group;
   }
@@ -136,12 +136,28 @@ class ZenstudyToolDownloader {
     }
   }
 
+  getCurrentLessonStartedAt() {
+    const iframe = this.getModalIframe();
+    const candidates = [];
+
+    try {
+      const performance = iframe?.contentWindow?.performance;
+      candidates.push(performance?.timeOrigin);
+      candidates.push(performance?.timing?.navigationStart);
+    } catch (_) {
+      // Cross-origin or not-yet-ready frames fall back below.
+    }
+
+    const startedAt = candidates.find((value) => Number.isFinite(value) && value > 0);
+    return startedAt || Date.now() - 15000;
+  }
+
   syncLessonContext() {
     const nextFingerprint = this.getCurrentLessonFingerprint();
     if (nextFingerprint === this.activeLessonFingerprint) return false;
 
     this.activeLessonFingerprint = nextFingerprint;
-    this.activeLessonChangedAt = nextFingerprint ? Date.now() : 0;
+    this.activeLessonChangedAt = nextFingerprint ? this.getCurrentLessonStartedAt() : 0;
     this.videoInfo = null;
     this.resetDownloadState();
     this.resetSlideDownloadState();
@@ -179,10 +195,66 @@ class ZenstudyToolDownloader {
     return true;
   }
 
+  buildVideoInfoFromUrl(url) {
+    if (typeof url !== 'string' || !url.trim()) return null;
+    if (/^(?:blob|data):/i.test(url)) return null;
+
+    let href = '';
+    try {
+      href = new URL(url, globalThis.location?.href || 'https://www.nnn.ed.nico/').href;
+    } catch (_) {
+      return null;
+    }
+
+    const isM3U8 = /\.m3u8(?:[?#]|$)/i.test(href);
+    const isMP4 = /\.mp4(?:[?#]|$)/i.test(href);
+    if (!isM3U8 && !isMP4) return null;
+
+    return {
+      url: href,
+      type: isMP4 ? 'mp4' : 'm3u8',
+      timestamp: Date.now(),
+    };
+  }
+
+  findVideoInfoInDocument(doc, seenDocs = new Set()) {
+    if (!doc || seenDocs.has(doc)) return null;
+    seenDocs.add(doc);
+
+    const candidates = [];
+    doc.querySelectorAll('video').forEach((video) => {
+      candidates.push(video.currentSrc, video.src, video.getAttribute('src'));
+      video.querySelectorAll('source[src]').forEach((source) => {
+        candidates.push(source.currentSrc, source.src, source.getAttribute('src'));
+      });
+    });
+
+    for (const candidate of candidates) {
+      const videoInfo = this.buildVideoInfoFromUrl(candidate);
+      if (videoInfo) return videoInfo;
+    }
+
+    for (const childFrame of doc.querySelectorAll('iframe')) {
+      const videoInfo = this.findVideoInfoInDocument(this.getIframeDocument(childFrame), seenDocs);
+      if (videoInfo) return videoInfo;
+    }
+
+    return null;
+  }
+
+  applyDomVideoInfo() {
+    const videoInfo = this.findVideoInfoInDocument(this.getIframeDocument(this.getModalIframe()));
+    return Boolean(videoInfo && this.applyVideoInfo(videoInfo));
+  }
+
   requestLatestVideoInfo() {
     safeRuntimeSendMessage({ type: MESSAGE_TYPES.getVideoUrl }, (response, error) => {
       if (error) return;
       if (response && response.videoInfo && this.applyVideoInfo(response.videoInfo) && this.downloadEnabled) {
+        this.checkAndShow();
+        return;
+      }
+      if (this.applyDomVideoInfo() && this.downloadEnabled) {
         this.checkAndShow();
       }
     });
@@ -244,11 +316,14 @@ class ZenstudyToolDownloader {
   }
 
   getModalIframe() {
-    return document.querySelector('.ReactModal__Content iframe[src*="/movies/"]');
+    return document.querySelector([
+      '.ReactModal__Content iframe[src*="/movies/"]',
+      'iframe[title="教材"][src*="/movies/"]',
+    ].join(', '));
   }
 
   hasVideoModalOpen() {
-    return this.isModalOpen() && Boolean(this.getModalIframe());
+    return Boolean(this.getModalIframe());
   }
 
   getIframeDocument(iframe) {
@@ -518,6 +593,7 @@ class ZenstudyToolDownloader {
     if (!btn) return;
 
     this.activeConversionRequestId = null;
+    if (!this.hasCurrentVideoInfo()) this.applyDomVideoInfo();
 
     if (this.hasCurrentVideoInfo()) {
       this.stopWaitingPoll();
@@ -541,6 +617,12 @@ class ZenstudyToolDownloader {
       }
 
       if (this.hasCurrentVideoInfo()) {
+        this.stopWaitingPoll();
+        this.setReadyState();
+        return;
+      }
+
+      if (this.applyDomVideoInfo()) {
         this.stopWaitingPoll();
         this.setReadyState();
         return;
@@ -605,10 +687,6 @@ class ZenstudyToolDownloader {
     }, 2500);
   }
 
-  isModalOpen() {
-    return !!document.querySelector('.ReactModal__Overlay--after-open');
-  }
-
   getTitle() {
     if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
       return ZenstudyToolDownloaderUtils.normalizeTitleText(this.lastSelectedTitle);
@@ -662,6 +740,10 @@ class ZenstudyToolDownloader {
     return '';
   }
 
+  getButtonHost() {
+    return document.querySelector('.ReactModal__Content') || this.getModalIframe()?.parentElement || null;
+  }
+
   checkAndShow() {
     if (!this.hasVideoModalOpen() || !this.hasAnyDownloadEnabled()) {
       this.syncLessonContext();
@@ -671,10 +753,10 @@ class ZenstudyToolDownloader {
 
     const lessonChanged = this.syncLessonContext();
 
-    const modalContent = document.querySelector('.ReactModal__Content');
-    if (!modalContent) return;
+    const buttonHost = this.getButtonHost();
+    if (!buttonHost) return;
 
-    const buttonGroup = this.ensureButtonGroup(modalContent);
+    const buttonGroup = this.ensureButtonGroup(buttonHost);
     let btn = this.getDownloadButton();
     let slideBtn = this.getSlideDownloadButton();
     const hasRequiredButtons = (!this.downloadEnabled || Boolean(btn)) && (!this.slideDownloadEnabled || Boolean(slideBtn));

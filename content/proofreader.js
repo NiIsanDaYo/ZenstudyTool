@@ -6,6 +6,8 @@ class ZenstudyToolProofreader {
     this.isProcessing = false;
     this.spinnerIndex = 0;
     this.spinnerTimer = null;
+    this.observedIframeDocument = null;
+    this.iframeDocumentObserver = null;
     this.observer = createDebouncedObserver(() => this.checkIframe(), 500);
 
     this.injectStyles();
@@ -75,18 +77,31 @@ class ZenstudyToolProofreader {
     return getAccessibleIframeDocument(iframe);
   }
 
+  watchIframeDocument(iframe, iframeDoc) {
+    if (!iframeDoc || this.observedIframeDocument === iframeDoc) return;
+    if (this.iframeDocumentObserver) this.iframeDocumentObserver.disconnect();
+
+    this.observedIframeDocument = iframeDoc;
+    this.iframeDocumentObserver = createDebouncedRootObserver(
+      iframeDoc.documentElement || iframeDoc.body,
+      () => this.showButton(iframe),
+      200
+    );
+  }
+
   showButton(iframe) {
     if (!this.enabled) return;
 
     const iframeDoc = this.getIframeDocument(iframe);
     if (!iframeDoc) return;
+    this.watchIframeDocument(iframe, iframeDoc);
 
-    const evaluateButtonWrapper = iframeDoc.querySelector('.evaluate-button');
+    const evaluateButtonWrapper = findActionButtonWrapper(iframeDoc);
     if (!evaluateButtonWrapper) return;
 
     const proofreadFields = this.getVisibleProofreadFields(iframeDoc);
     if (proofreadFields.length === 0) {
-      this.hideButton(iframe);
+      this.hideButton(iframe, false);
       return;
     }
 
@@ -111,7 +126,13 @@ class ZenstudyToolProofreader {
     this.updateReadyButton(iframeDoc);
   }
 
-  hideButton(iframe) {
+  hideButton(iframe, disconnectObserver = true) {
+    if (disconnectObserver && this.iframeDocumentObserver) {
+      this.iframeDocumentObserver.disconnect();
+      this.iframeDocumentObserver = null;
+      this.observedIframeDocument = null;
+    }
+
     if (this.btn && this.btn.parentNode) {
       this.btn.parentNode.removeChild(this.btn);
     }
@@ -489,6 +510,7 @@ class ZenstudyToolProofreader {
     if (this.isProcessing) return;
     if (!this.enabled || !this.apiKeyConfigured) return alert(this.getProofreadButtonTitle(false));
     const iframeDoc = this.getIframeDocument(iframe);
+    if (!iframeDoc) return alert('入力欄を取得できませんでした。ページを再読み込みしてください。');
     const target = this.createProofreadTarget(field);
     if (!target) return alert('入力内容がありません。');
 
@@ -524,6 +546,7 @@ class ZenstudyToolProofreader {
     if (this.isProcessing) return;
     if (!this.enabled || !this.apiKeyConfigured) return alert(this.getProofreadButtonTitle(true));
     const iframeDoc = this.getIframeDocument(iframe);
+    if (!iframeDoc) return alert('入力欄を取得できませんでした。ページを再読み込みしてください。');
     const targets = this.collectProofreadTargets(iframeDoc);
     if (targets.length === 0) return alert('入力済みの欄がありません。');
 
@@ -536,17 +559,20 @@ class ZenstudyToolProofreader {
         const target = targets[i];
         this.startSpinner(this.btn, `${PROOFREAD_BUTTON_TEXT.working} ${i+1}/${targets.length}`);
         target.element.classList.add('zst-proofreading-field');
-        const originalText = target.value;
-        const correctedText = await this.requestProofread(target);
-        this.validateCorrectedText(target, correctedText);
-        this.applyFieldValue(target.element, correctedText);
-        this.showDiff(target.element, originalText, correctedText);
-        target.element.dataset.zstOriginalText = originalText;
-        target.element.classList.remove('zst-proofreading-field');
-        const btn = target.element.parentNode.querySelector(`.${CSS_CLASSES.fieldProofreadButton}`);
-        if (btn) {
-          btn.dataset.zstProofreadState = 'undo';
-          this.setProofreadButtonState(btn, '元に戻す', 'default', false, '元のテキストに戻します');
+        try {
+          const originalText = target.value;
+          const correctedText = await this.requestProofread(target);
+          this.validateCorrectedText(target, correctedText);
+          this.applyFieldValue(target.element, correctedText);
+          this.showDiff(target.element, originalText, correctedText);
+          target.element.dataset.zstOriginalText = originalText;
+          const btn = target.element.parentNode.querySelector(`.${CSS_CLASSES.fieldProofreadButton}`);
+          if (btn) {
+            btn.dataset.zstProofreadState = 'undo';
+            this.setProofreadButtonState(btn, '元に戻す', 'default', false, '元のテキストに戻します');
+          }
+        } finally {
+          target.element.classList.remove('zst-proofreading-field');
         }
       }
       this.stopSpinner();
