@@ -162,18 +162,24 @@
   opacity: 0.8;
 }
 
-.__ZENSTUDYTOOL_answerLengthHint {
-  margin-top: 4px;
-  color: #d44c4c;
+.__ZENSTUDYTOOL_answerLengthBadge {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background-color: #ff4f4f;
+  color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 1.5;
-  text-align: right;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.__ZENSTUDYTOOL_answerLengthFieldWarning {
-  border-color: #d44c4c !important;
-  box-shadow: 0 0 0 1px rgba(212, 76, 76, 0.35) !important;
+.__ZENSTUDYTOOL_answerLengthBadge[hidden] {
+  display: none !important;
 }
 

@@ -29,8 +29,7 @@ const CSS_CLASSES = {
   fieldProofreadRowTextarea: "__ZENSTUDYTOOL_fieldProofreadRowTextarea",
   fieldProofreadActions: "__ZENSTUDYTOOL_fieldProofreadActions",
   fieldProofreadButton: "__ZENSTUDYTOOL_fieldProofreadButton",
-  answerLengthHint: "__ZENSTUDYTOOL_answerLengthHint",
-  answerLengthFieldWarning: "__ZENSTUDYTOOL_answerLengthFieldWarning",
+  answerLengthBadge: "__ZENSTUDYTOOL_answerLengthBadge",
 };
 
 /** DOM要素ID */

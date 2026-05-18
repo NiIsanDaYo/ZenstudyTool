@@ -48,65 +48,86 @@ class ZenstudyToolAnswerAssist {
   updateField(field) {
     const rule = this.getLengthRule(field);
     if (!rule?.min && !rule?.max) {
-      this.removeHint(field);
+      this.removeBadge(field);
       return;
     }
 
     const count = this.countCharacters(field.value);
-    this.syncNativeOverLimitWarning(field, rule, count);
+    const nativeOverLimitWarning = this.syncNativeOverLimitWarning(field, rule, count);
 
     const maxExceeded = rule.max && count > rule.max;
     const minShortage = !maxExceeded && rule.min && count > 0 && count < rule.min;
     const shouldWarn = maxExceeded || minShortage;
-    const hint = this.ensureHint(field);
 
     if (!shouldWarn) {
-      hint.hidden = true;
-      field.classList.remove(CSS_CLASSES.answerLengthFieldWarning);
+      this.hideBadge(field);
       return;
     }
 
-    hint.hidden = false;
-    hint.textContent = maxExceeded
-      ? `${count - rule.max}文字オーバー（上限${rule.max}文字）`
-      : `最低${rule.min}文字まであと${rule.min - count}文字`;
-    field.classList.add(CSS_CLASSES.answerLengthFieldWarning);
+    if (maxExceeded && nativeOverLimitWarning) {
+      this.hideBadge(field);
+    } else {
+      const badge = this.ensureBadge(field);
+      badge.hidden = false;
+      badge.textContent = maxExceeded
+        ? `${count - rule.max}文字オーバー`
+        : `${rule.min - count}文字不足`;
+      this.placeBadge(field, badge);
+    }
   }
 
-  ensureHint(field) {
+  ensureBadge(field) {
     const doc = field.ownerDocument;
-    let hint = field.dataset.zstAnswerLengthHintId
-      ? doc.getElementById(field.dataset.zstAnswerLengthHintId)
+    let badge = field.dataset.zstAnswerLengthBadgeId
+      ? doc.getElementById(field.dataset.zstAnswerLengthBadgeId)
       : null;
 
-    if (!hint) {
-      hint = doc.createElement("div");
-      hint.id = `__ZENSTUDYTOOL_answerLengthHint_${++this.hintSequence}`;
-      hint.className = CSS_CLASSES.answerLengthHint;
-      field.dataset.zstAnswerLengthHintId = hint.id;
+    if (!badge) {
+      badge = doc.createElement("span");
+      badge.id = `__ZENSTUDYTOOL_answerLengthBadge_${++this.hintSequence}`;
+      badge.className = CSS_CLASSES.answerLengthBadge;
+      field.dataset.zstAnswerLengthBadgeId = badge.id;
+    }
+
+    return badge;
+  }
+
+  placeBadge(field, badge) {
+    const counter = this.findCounterElement(field);
+    if (counter?.parentNode) {
+      counter.parentNode.insertBefore(badge, counter);
+      return;
     }
 
     const anchor = this.getInsertAnchor(field);
     const parent = anchor.parentNode;
-    if (parent && hint.previousElementSibling !== anchor) {
-      parent.insertBefore(hint, anchor.nextSibling);
+    if (parent && badge.previousElementSibling !== anchor) {
+      parent.insertBefore(badge, anchor.nextSibling);
     }
-
-    return hint;
   }
 
   getInsertAnchor(field) {
     return field.closest(`.${CSS_CLASSES.fieldProofreadRow}`) || field;
   }
 
-  removeHint(field) {
-    field.classList.remove(CSS_CLASSES.answerLengthFieldWarning);
+  hideBadge(field) {
+    const badge = this.getBadge(field);
+    if (badge) {
+      badge.hidden = true;
+      badge.textContent = "";
+    }
+  }
 
-    if (!field.dataset.zstAnswerLengthHintId) return;
+  removeBadge(field) {
+    const badge = this.getBadge(field);
+    if (badge) badge.remove();
+    delete field.dataset.zstAnswerLengthBadgeId;
+  }
 
-    const hint = field.ownerDocument.getElementById(field.dataset.zstAnswerLengthHintId);
-    if (hint) hint.remove();
-    delete field.dataset.zstAnswerLengthHintId;
+  getBadge(field) {
+    return field.dataset.zstAnswerLengthBadgeId
+      ? field.ownerDocument.getElementById(field.dataset.zstAnswerLengthBadgeId)
+      : null;
   }
 
   getLengthRule(field) {
@@ -164,11 +185,11 @@ class ZenstudyToolAnswerAssist {
   }
 
   syncNativeOverLimitWarning(field, rule, count) {
-    if (!rule?.max) return;
+    if (!rule?.max) return false;
 
     const expectedText = count > rule.max ? `${count - rule.max}文字オーバー` : "";
     const container = field.closest("li.exercise-item, .exercise-item, .answer-area") || field.closest("section.exercise");
-    if (!container) return;
+    if (!container) return false;
 
     const candidates = Array.from(container.querySelectorAll("*"))
       .filter((el) => {
@@ -179,9 +200,13 @@ class ZenstudyToolAnswerAssist {
     for (const candidate of candidates) {
       if (!expectedText) {
         candidate.textContent = "";
+        candidate.hidden = true;
+        candidate.style.display = "none";
         continue;
       }
 
+      candidate.hidden = false;
+      candidate.style.display = "";
       if (this.normalizeText(candidate.textContent || "") !== expectedText) {
         candidate.textContent = expectedText;
       }
@@ -190,11 +215,28 @@ class ZenstudyToolAnswerAssist {
     if (expectedText) {
       window.setTimeout(() => {
         for (const candidate of candidates) {
+          candidate.hidden = false;
+          candidate.style.display = "";
           if (this.normalizeText(candidate.textContent || "") !== expectedText) {
             candidate.textContent = expectedText;
           }
         }
       }, 0);
     }
+
+    return candidates.length > 0;
+  }
+
+  findCounterElement(field) {
+    const container = field.closest("li.exercise-item, .exercise-item, .answer-area") || field.closest("section.exercise");
+    if (!container) return null;
+
+    const counters = Array.from(container.querySelectorAll(".counter, [class*='counter'], [class*='count']"))
+      .filter((el) => /^\d{1,5}文字$/.test(this.normalizeText(el.textContent || "")));
+
+    if (counters.length === 0) return null;
+
+    const fieldPosition = field.compareDocumentPosition.bind(field);
+    return counters.find((counter) => fieldPosition(counter) & Node.DOCUMENT_POSITION_FOLLOWING) || counters[counters.length - 1];
   }
 }
