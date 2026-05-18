@@ -47,38 +47,43 @@ class ZenstudyToolAnswerAssist {
 
   updateField(field) {
     const rule = this.getLengthRule(field);
-    if (!rule?.min) {
+    if (!rule?.min && !rule?.max) {
       this.removeHint(field);
       return;
     }
 
     const count = this.countCharacters(field.value);
-    const shouldWarn = count > 0 && count < rule.min;
+    this.syncNativeOverLimitWarning(field, rule, count);
+
+    const maxExceeded = rule.max && count > rule.max;
+    const minShortage = !maxExceeded && rule.min && count > 0 && count < rule.min;
+    const shouldWarn = maxExceeded || minShortage;
     const hint = this.ensureHint(field);
 
     if (!shouldWarn) {
       hint.hidden = true;
-      field.classList.remove(CSS_CLASSES.minLengthFieldWarning);
+      field.classList.remove(CSS_CLASSES.answerLengthFieldWarning);
       return;
     }
 
-    const remaining = rule.min - count;
     hint.hidden = false;
-    hint.textContent = `最低${rule.min}文字まであと${remaining}文字`;
-    field.classList.add(CSS_CLASSES.minLengthFieldWarning);
+    hint.textContent = maxExceeded
+      ? `${count - rule.max}文字オーバー（上限${rule.max}文字）`
+      : `最低${rule.min}文字まであと${rule.min - count}文字`;
+    field.classList.add(CSS_CLASSES.answerLengthFieldWarning);
   }
 
   ensureHint(field) {
     const doc = field.ownerDocument;
-    let hint = field.dataset.zstMinLengthHintId
-      ? doc.getElementById(field.dataset.zstMinLengthHintId)
+    let hint = field.dataset.zstAnswerLengthHintId
+      ? doc.getElementById(field.dataset.zstAnswerLengthHintId)
       : null;
 
     if (!hint) {
       hint = doc.createElement("div");
-      hint.id = `__ZENSTUDYTOOL_minLengthHint_${++this.hintSequence}`;
-      hint.className = CSS_CLASSES.minLengthHint;
-      field.dataset.zstMinLengthHintId = hint.id;
+      hint.id = `__ZENSTUDYTOOL_answerLengthHint_${++this.hintSequence}`;
+      hint.className = CSS_CLASSES.answerLengthHint;
+      field.dataset.zstAnswerLengthHintId = hint.id;
     }
 
     const anchor = this.getInsertAnchor(field);
@@ -95,20 +100,19 @@ class ZenstudyToolAnswerAssist {
   }
 
   removeHint(field) {
-    field.classList.remove(CSS_CLASSES.minLengthFieldWarning);
+    field.classList.remove(CSS_CLASSES.answerLengthFieldWarning);
 
-    if (!field.dataset.zstMinLengthHintId) return;
+    if (!field.dataset.zstAnswerLengthHintId) return;
 
-    const hint = field.ownerDocument.getElementById(field.dataset.zstMinLengthHintId);
+    const hint = field.ownerDocument.getElementById(field.dataset.zstAnswerLengthHintId);
     if (hint) hint.remove();
-    delete field.dataset.zstMinLengthHintId;
+    delete field.dataset.zstAnswerLengthHintId;
   }
 
   getLengthRule(field) {
     const text = this.collectQuestionText(field);
-    const min = this.parseMinimumCharacterCount(text);
-    if (!min) return null;
-    return { min };
+    const rule = this.parseCharacterCountRule(text);
+    return rule.min || rule.max ? rule : null;
   }
 
   collectQuestionText(field) {
@@ -131,18 +135,66 @@ class ZenstudyToolAnswerAssist {
       .trim();
   }
 
-  parseMinimumCharacterCount(text) {
+  parseCharacterCountRule(text) {
     const normalized = this.normalizeText(text);
+    const rule = { min: null, max: null };
+
     const explicitMin = normalized.match(/(\d{1,5})\s*(?:字|文字)\s*以上/);
-    if (explicitMin) return Number.parseInt(explicitMin[1], 10) || null;
+    if (explicitMin) rule.min = Number.parseInt(explicitMin[1], 10) || null;
+
+    const explicitMax = normalized.match(/(\d{1,5})\s*(?:字|文字)\s*(?:以内|以下)/);
+    if (explicitMax) rule.max = Number.parseInt(explicitMax[1], 10) || null;
 
     const range = normalized.match(/(\d{1,5})\s*[~〜～\-－]\s*\d{1,5}\s*(?:字|文字)/);
-    if (range) return Number.parseInt(range[1], 10) || null;
+    if (range) {
+      const rangeMax = normalized.match(/\d{1,5}\s*[~〜～\-－]\s*(\d{1,5})\s*(?:字|文字)/);
+      rule.min = rule.min || Number.parseInt(range[1], 10) || null;
+      rule.max = rule.max || Number.parseInt(rangeMax?.[1] || "", 10) || null;
+    }
 
-    return null;
+    if (rule.min && rule.max && rule.min > rule.max) {
+      return { min: rule.max, max: rule.min };
+    }
+
+    return rule;
   }
 
   countCharacters(value) {
     return String(value || "").replace(/\r\n/g, "\n").length;
+  }
+
+  syncNativeOverLimitWarning(field, rule, count) {
+    if (!rule?.max) return;
+
+    const expectedText = count > rule.max ? `${count - rule.max}文字オーバー` : "";
+    const container = field.closest("li.exercise-item, .exercise-item, .answer-area") || field.closest("section.exercise");
+    if (!container) return;
+
+    const candidates = Array.from(container.querySelectorAll("*"))
+      .filter((el) => {
+        const text = this.normalizeText(el.textContent || "");
+        return /^\d{1,5}文字オーバー$/.test(text);
+      });
+
+    for (const candidate of candidates) {
+      if (!expectedText) {
+        candidate.textContent = "";
+        continue;
+      }
+
+      if (this.normalizeText(candidate.textContent || "") !== expectedText) {
+        candidate.textContent = expectedText;
+      }
+    }
+
+    if (expectedText) {
+      window.setTimeout(() => {
+        for (const candidate of candidates) {
+          if (this.normalizeText(candidate.textContent || "") !== expectedText) {
+            candidate.textContent = expectedText;
+          }
+        }
+      }, 0);
+    }
   }
 }
