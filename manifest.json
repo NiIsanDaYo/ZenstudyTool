@@ -37,6 +37,7 @@
       ],
       "js": [
         "shared/constants.js",
+        "content/site-routes.js",
         "content/utils.js",
         "content/auto-filter.js",
         "content/time-logic.js",
@@ -44,7 +45,9 @@
         "content/auto-skip.js",
         "content/always-focus.js",
         "content/copy-text.js",
+        "content/answer-assist.js",
         "content/proofreader.js",
+        "content/downloader-utils.js",
         "content/downloader.js",
         "content/main.js"
       ],
@@ -56,7 +59,7 @@
     "*://*.nnn.ed.nico/*",
     "*://*.nicovideo.jp/*",
     "*://*.dmc.nico/*",
-    "<all_urls>"
+    "*://*.cdn.nnn.ed.nico/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"

@@ -188,26 +188,14 @@ class ZenstudyToolDownloader {
     });
   }
 
-  normalizeTitleText(text) {
-    if (!text) return '';
-
-    return text
-      .replace(/\s+/g, ' ')
-      .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*\/\s*\d{1,2}:\d{2}(?::\d{2})?[\s\S]*$/, '')
-      .replace(/\s+-\s+ZEN Study$/, '')
-      .replace(/\s+\|\s+N予備校$/, '')
-      .replace(/\s+-\s+N予備校$/, '')
-      .trim();
-  }
-
   isUsableLessonTitle(text) {
-    const normalized = this.normalizeTitleText(text);
+    const normalized = ZenstudyToolDownloaderUtils.normalizeTitleText(text);
     if (!normalized) return false;
     if (normalized === '教材' || normalized === '動画' || normalized === 'ZEN Study') {
       return false;
     }
 
-    const sectionTitle = this.normalizeTitleText(this.getSectionTitle());
+    const sectionTitle = ZenstudyToolDownloaderUtils.normalizeTitleText(this.getSectionTitle());
     if (sectionTitle && normalized === sectionTitle) {
       return false;
     }
@@ -235,7 +223,7 @@ class ZenstudyToolDownloader {
       const el = node.querySelector(selector);
       if (!el) continue;
 
-      const text = this.normalizeTitleText(el.textContent || '');
+      const text = ZenstudyToolDownloaderUtils.normalizeTitleText(el.textContent || '');
       if (this.isUsableLessonTitle(text)) return text;
     }
 
@@ -280,7 +268,7 @@ class ZenstudyToolDownloader {
     ];
 
     for (const candidate of metaCandidates) {
-      const title = this.normalizeTitleText(candidate);
+      const title = ZenstudyToolDownloaderUtils.normalizeTitleText(candidate);
       if (this.isUsableLessonTitle(title)) return title;
     }
 
@@ -352,7 +340,7 @@ class ZenstudyToolDownloader {
         || urlCandidates.some((candidate) => candidate.includes(`/movies/${movieId}`));
 
       if (matchesMovie) {
-        const title = this.normalizeTitleText(
+        const title = ZenstudyToolDownloaderUtils.normalizeTitleText(
           current.name
           || current.title
           || current.display_name
@@ -373,7 +361,7 @@ class ZenstudyToolDownloader {
 
   async resolveTitle() {
     if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
-      return this.normalizeTitleText(this.lastSelectedTitle);
+      return ZenstudyToolDownloaderUtils.normalizeTitleText(this.lastSelectedTitle);
     }
 
     const iframeDoc = this.getIframeDocument(this.getModalIframe());
@@ -388,25 +376,6 @@ class ZenstudyToolDownloader {
     }
 
     return this.getTitle();
-  }
-
-  pickLargestSrcsetCandidate(srcset) {
-    const candidates = String(srcset || '')
-      .split(',')
-      .map((entry) => entry.trim().split(/\s+/)[0])
-      .filter(Boolean);
-
-    return candidates.length > 0 ? candidates[candidates.length - 1] : '';
-  }
-
-  resolveAssetUrl(candidate, baseUrl) {
-    if (!candidate) return '';
-
-    try {
-      return new URL(candidate, baseUrl || window.location.href).href;
-    } catch (_) {
-      return '';
-    }
   }
 
   waitForIframeDocument(iframe, timeoutMs = 4000) {
@@ -475,58 +444,6 @@ class ZenstudyToolDownloader {
     return this.collectNestedFrameDocuments(referenceFrames);
   }
 
-  isDownloadableSlideUrl(url) {
-    if (!url || /^data:/i.test(url) || /^blob:/i.test(url)) return false;
-
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch (_) {
-      return false;
-    }
-  }
-
-  isLikelySlideImageElement(image, url) {
-    if (!this.isDownloadableSlideUrl(url)) return false;
-
-    const width = image.naturalWidth || Number.parseInt(image.getAttribute('width') || '', 10) || image.clientWidth || 0;
-    const height = image.naturalHeight || Number.parseInt(image.getAttribute('height') || '', 10) || image.clientHeight || 0;
-
-    let extension = '';
-    try {
-      const pathname = new URL(url).pathname;
-      extension = pathname.split('.').pop()?.toLowerCase() || '';
-    } catch (_) {
-      extension = '';
-    }
-
-    if (extension === 'svg' && (!width || width < 240) && (!height || height < 160)) {
-      return false;
-    }
-
-    if (width && height && (width < 240 || height < 160)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  sanitizeSlideFileStem(text) {
-    return String(text || '')
-      .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/[. ]+$/g, '')
-      .slice(0, 40)
-      .replace(/[. ]+$/g, '');
-  }
-
-  buildSlideFileStem(index, rawLabel = '') {
-    const prefix = `slide_${String(index + 1).padStart(3, '0')}`;
-    const label = this.sanitizeSlideFileStem(rawLabel);
-    return label ? `${prefix}_${label}` : prefix;
-  }
-
   collectSlideImagesFromDocument(doc, images, seenUrls) {
     const imageElements = Array.from(doc.querySelectorAll('img'));
     let foundDirectImage = false;
@@ -537,11 +454,11 @@ class ZenstudyToolDownloader {
         || image.getAttribute('data-src')
         || image.getAttribute('data-lazy-src')
         || image.getAttribute('data-original')
-        || this.pickLargestSrcsetCandidate(image.getAttribute('srcset'))
-        || this.pickLargestSrcsetCandidate(image.getAttribute('data-srcset'));
-      const url = this.resolveAssetUrl(candidateUrl, doc.baseURI);
+        || ZenstudyToolDownloaderUtils.pickLargestSrcsetCandidate(image.getAttribute('srcset'))
+        || ZenstudyToolDownloaderUtils.pickLargestSrcsetCandidate(image.getAttribute('data-srcset'));
+      const url = ZenstudyToolDownloaderUtils.resolveAssetUrl(candidateUrl, doc.baseURI);
 
-      if (!this.isLikelySlideImageElement(image, url) || seenUrls.has(url)) {
+      if (!ZenstudyToolDownloaderUtils.isLikelySlideImageElement(image, url) || seenUrls.has(url)) {
         continue;
       }
 
@@ -555,7 +472,7 @@ class ZenstudyToolDownloader {
       foundDirectImage = true;
       images.push({
         url,
-        fileStem: this.buildSlideFileStem(images.length, label),
+        fileStem: ZenstudyToolDownloaderUtils.buildSlideFileStem(images.length, label),
       });
     }
 
@@ -563,15 +480,15 @@ class ZenstudyToolDownloader {
 
     const anchorElements = Array.from(doc.querySelectorAll('a[href]'));
     for (const anchor of anchorElements) {
-      const url = this.resolveAssetUrl(anchor.getAttribute('href'), doc.baseURI);
-      if (!this.isDownloadableSlideUrl(url) || seenUrls.has(url)) continue;
+      const url = ZenstudyToolDownloaderUtils.resolveAssetUrl(anchor.getAttribute('href'), doc.baseURI);
+      if (!ZenstudyToolDownloaderUtils.isDownloadableSlideUrl(url) || seenUrls.has(url)) continue;
       if (!/\.(?:png|jpe?g|webp|gif|bmp)(?:[?#]|$)/i.test(url)) continue;
 
       const label = anchor.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
       seenUrls.add(url);
       images.push({
         url,
-        fileStem: this.buildSlideFileStem(images.length, label),
+        fileStem: ZenstudyToolDownloaderUtils.buildSlideFileStem(images.length, label),
       });
     }
   }
@@ -694,7 +611,7 @@ class ZenstudyToolDownloader {
 
   getTitle() {
     if (this.isUsableLessonTitle(this.lastSelectedTitle)) {
-      return this.normalizeTitleText(this.lastSelectedTitle);
+      return ZenstudyToolDownloaderUtils.normalizeTitleText(this.lastSelectedTitle);
     }
 
     const iframeTitle = this.extractTitleFromDocument(this.getIframeDocument(this.getModalIframe()));
@@ -717,12 +634,12 @@ class ZenstudyToolDownloader {
 
     const breadcrumbTitle = document.querySelector('nav[aria-label="パンくずリスト"] h2 span');
     if (breadcrumbTitle && breadcrumbTitle.textContent.trim()) {
-      return this.normalizeTitleText(breadcrumbTitle.textContent);
+      return ZenstudyToolDownloaderUtils.normalizeTitleText(breadcrumbTitle.textContent);
     }
 
     const titleEl = document.querySelector('h1, [class*="title"]');
-    if (titleEl) return this.normalizeTitleText(titleEl.textContent);
-    return this.normalizeTitleText(document.title);
+    if (titleEl) return ZenstudyToolDownloaderUtils.normalizeTitleText(titleEl.textContent);
+    return ZenstudyToolDownloaderUtils.normalizeTitleText(document.title);
   }
 
   getSectionTitle() {

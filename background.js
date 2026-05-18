@@ -24,6 +24,12 @@ const DOWNLOAD_PROGRESS_THROTTLE_MS = 250;
 const GEMINI_REQUEST_TIMEOUT_MS = 30 * 1000;
 const GEMINI_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const VIDEO_REQUEST_URL_PATTERNS = Object.freeze([
+  '*://*.nnn.ed.nico/*',
+  '*://*.nicovideo.jp/*',
+  '*://*.dmc.nico/*',
+  '*://*.cdn.nnn.ed.nico/*',
+]);
 const DOWNLOAD_PATH_SEGMENT_MAX_LENGTH = 100;
 const WINDOWS_RESERVED_FILE_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const PROOFREAD_SYSTEM_INSTRUCTION = 'You are a proofreading engine for student submissions. Only rewrite the student text itself. Never add explanations, labels, greetings, bullet points, quotations, or any extra text that is not meant to be submitted. Preserve the original meaning and language, and if the text is already acceptable, return it unchanged.';
@@ -1071,7 +1077,7 @@ chrome.webRequest.onBeforeRequest.addListener(
       // content script がまだロードされていない場合は無視
     });
   },
-  { urls: ['*://*.nnn.ed.nico/*', '*://*.nicovideo.jp/*', '*://*.dmc.nico/*', '*://*.cdn.nnn.ed.nico/*', '<all_urls>'] },
+  { urls: VIDEO_REQUEST_URL_PATTERNS },
   []
 );
 

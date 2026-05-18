@@ -8,5 +8,6 @@ if (window.top === window.self) {
   const autoSkip = new ZenstudyToolAutoSkip();
   const copyText = new ZenstudyToolCopyText();
   const proofreader = new ZenstudyToolProofreader();
+  const answerAssist = new ZenstudyToolAnswerAssist();
   const downloader = new ZenstudyToolDownloader();
 }

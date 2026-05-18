@@ -29,16 +29,9 @@ const CSS_CLASSES = {
   fieldProofreadRowTextarea: "__ZENSTUDYTOOL_fieldProofreadRowTextarea",
   fieldProofreadActions: "__ZENSTUDYTOOL_fieldProofreadActions",
   fieldProofreadButton: "__ZENSTUDYTOOL_fieldProofreadButton",
+  answerLengthHint: "__ZENSTUDYTOOL_answerLengthHint",
+  answerLengthFieldWarning: "__ZENSTUDYTOOL_answerLengthFieldWarning",
 };
-
-const ACTION_IFRAME_SELECTOR = [
-  'iframe[src*="/evaluation_tests/"]',
-  'iframe[src*="/evaluation_reports/"]',
-  'iframe[src*="/essay_tests/"]',
-  'iframe[src*="/essay_reports/"]',
-  'iframe[src*="/reports/"]',
-].join(', ');
-const PROOFREAD_FIELD_SELECTOR = 'textarea:not([disabled]):not([readonly])';
 
 /** DOM要素ID */
 const ELEMENT_IDS = {
@@ -56,7 +49,6 @@ const DOWNLOAD_BUTTON_TEXT = {
   preparing: "準備中...",
   downloading: "ダウンロード中...",
   saving: "保存中...",
-  started: "保存開始",
   success: "完了",
   failed: "失敗",
 };

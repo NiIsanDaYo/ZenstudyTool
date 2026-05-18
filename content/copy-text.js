@@ -151,6 +151,34 @@ class ZenstudyToolCopyText {
       .trim();
   }
 
+  normalizeMarkdownText(text) {
+    return String(text || "")
+      .replace(/\r/g, "\n")
+      .replace(/\u00a0/g, " ")
+      .replace(/\u3000/g, " ")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  appendMarkdownHeading(lines, level, text) {
+    const normalized = this.normalizeMarkdownText(text);
+    if (!normalized) return;
+
+    const hashes = "#".repeat(Math.min(Math.max(level, 1), 6));
+    lines.push(`${hashes} ${normalized}`);
+  }
+
+  extractQuestionText(qItem) {
+    const questionEl = qItem.querySelector(".question");
+    return this.normalizeMarkdownText(questionEl?.textContent || "");
+  }
+
+  extractAnswerChoiceText(answer) {
+    const spanEl = answer.querySelector("span");
+    return this.normalizeMarkdownText((spanEl || answer).textContent || "");
+  }
+
   findTextbookMetaInText(text) {
     if (!text) return "";
     const segments = text
@@ -313,7 +341,7 @@ class ZenstudyToolCopyText {
       throw new Error("IFrameのドキュメントにアクセスできません。");
     }
 
-    let resultText = "";
+    const lines = [];
 
     // 1. 親ページからコース名と単元名を取得
     const courseNameEl = document.querySelector('a[href^="/courses/"] span');
@@ -334,13 +362,11 @@ class ZenstudyToolCopyText {
       textbookMeta = this.findTextbookMetaInText(courseName);
     }
 
-    if (courseName || chapterName || textbookMeta) {
-      if (courseName) resultText += courseName + "\n";
-      if (chapterName) resultText += chapterName + "\n";
-      if (textbookMeta) {
-        resultText += `教科書情報: ${textbookMeta}\n`;
-      }
-      resultText += "\n";
+    if (courseName) this.appendMarkdownHeading(lines, 1, courseName);
+    if (chapterName) this.appendMarkdownHeading(lines, 2, chapterName);
+    if (textbookMeta) {
+      if (lines.length > 0) lines.push("");
+      lines.push(`> 教科書情報: ${this.normalizeMarkdownText(textbookMeta)}`);
     }
 
     // 2. IFrame内から問題文をスクレイピング
@@ -349,36 +375,34 @@ class ZenstudyToolCopyText {
       return null;
     }
 
-    exercises.forEach(exercise => {
+    exercises.forEach((exercise, exerciseIndex) => {
       // 大問 (問1 など)
       const statementEl = exercise.querySelector('.statement');
+      if (lines.length > 0) lines.push("");
       if (statementEl) {
-        resultText += statementEl.textContent.trim() + "\n";
+        this.appendMarkdownHeading(lines, 3, statementEl.textContent);
+      } else if (exercises.length > 1) {
+        this.appendMarkdownHeading(lines, 3, `大問${exerciseIndex + 1}`);
       }
 
       // 小問リストとその選択肢
       const questions = exercise.querySelectorAll('.question-list > li.exercise-item');
-      questions.forEach(qItem => {
-        const questionTextEl = qItem.querySelector('.question p, .question');
-        if (questionTextEl) {
-          resultText += questionTextEl.textContent.trim() + "\n";
+      questions.forEach((qItem, questionIndex) => {
+        const questionText = this.extractQuestionText(qItem);
+        if (questionText) {
+          lines.push(`${questionIndex + 1}. ${questionText}`);
         }
 
         const answers = qItem.querySelectorAll('.answers-choice');
         if (answers.length > 0) {
           answers.forEach(ans => {
-            const spanEl = ans.querySelector('span');
-            if (spanEl) {
-              resultText += spanEl.textContent.trim() + "\n";
-            } else {
-              resultText += ans.textContent.trim() + "\n";
-            }
+            const choiceText = this.extractAnswerChoiceText(ans);
+            if (choiceText) lines.push(`   - ${choiceText}`);
           });
         }
       });
-      resultText += "\n";
     });
 
-    return resultText.trim();
+    return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   }
 }
