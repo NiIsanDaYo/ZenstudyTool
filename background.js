@@ -1068,7 +1068,6 @@ chrome.webRequest.onBeforeRequest.addListener(
     };
 
     tabVideoUrls.set(tabId, videoInfo);
-    console.log(`[ZenstudyTool BG] 動画URL検出 (${videoInfo.type}): ${url.substring(0, 80)}...`);
 
     // content.js に通知
     chrome.tabs.sendMessage(tabId, {

@@ -348,7 +348,6 @@ async function downloadFromM3U8(m3u8Url, requestId) {
   try {
     sendProgress({ phase: 'init', current: 0, total: 0, requestId });
 
-    console.log('[ZenstudyTool Offscreen] M3U8解析中...');
     const mediaPlaylist = await resolveMediaPlaylist(m3u8Url);
     const bundle = buildLocalPlaylistBundle(
       mediaPlaylist.playlistUrl,
@@ -359,12 +358,10 @@ async function downloadFromM3U8(m3u8Url, requestId) {
       throw new Error('セグメントが見つかりません');
     }
 
-    console.log(`[ZenstudyTool Offscreen] アセット数: ${bundle.assets.length}`);
     const { assetDataByName, segmentDataByUrl } = await downloadAssets(bundle.assets, requestId);
 
     try {
       sendProgress({ phase: 'init', current: 0, total: 0, requestId });
-      console.log('[ZenstudyTool Offscreen] ffmpeg.wasm で MP4 変換中...');
       const mp4Data = await remuxToMp4(bundle, assetDataByName);
 
       const mp4Blob = new Blob([mp4Data], { type: 'video/mp4' });
@@ -428,5 +425,3 @@ chrome.runtime.onMessage.addListener((message) => {
     revokeBlobUrl(message.blobUrl);
   }
 });
-
-console.log('[ZenstudyTool Offscreen] 初期化完了(ffmpeg.wasm版)');
