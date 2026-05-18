@@ -29,6 +29,7 @@ const VIDEO_REQUEST_URL_PATTERNS = Object.freeze([
   '*://*.nicovideo.jp/*',
   '*://*.dmc.nico/*',
   '*://*.cdn.nnn.ed.nico/*',
+  '<all_urls>',
 ]);
 const DOWNLOAD_PATH_SEGMENT_MAX_LENGTH = 100;
 const WINDOWS_RESERVED_FILE_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;

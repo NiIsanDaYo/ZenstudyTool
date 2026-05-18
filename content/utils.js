@@ -283,10 +283,6 @@ const isExtensionContextInvalidatedError = (value) => {
 const reportExtensionContextInvalidated = (error) => {
   if (didWarnExtensionContextInvalidated) return;
   didWarnExtensionContextInvalidated = true;
-  console.warn(
-    "[ZenstudyTool] Extension context invalidated. Reload the page after reloading or updating the extension.",
-    error
-  );
 };
 
 const safeStorageGet = (defaults, callback) => {
