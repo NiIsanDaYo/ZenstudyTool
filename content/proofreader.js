@@ -213,6 +213,9 @@ class ZenstudyToolProofreader {
     iframeDoc
       .querySelectorAll(`.${CSS_CLASSES.fieldProofreadButton}`)
       .forEach((button) => {
+        // 元に戻す状態のボタンはリセットしない
+        if (button.dataset.zstProofreadState === 'undo') return;
+        
         this.setProofreadButtonState(
           button,
           FIELD_PROOFREAD_BUTTON_TEXT.ready,
@@ -448,13 +451,35 @@ class ZenstudyToolProofreader {
     }
     commit();
     diffView.innerHTML = html;
-    field.parentNode.insertBefore(diffView, field.nextSibling);
+    
+    // row コンテナ自体の直後に挿入する
+    const rowContainer = field.parentNode;
+    if (rowContainer && rowContainer.classList.contains(CSS_CLASSES.fieldProofreadRow)) {
+      rowContainer.parentNode.insertBefore(diffView, rowContainer.nextSibling);
+    } else {
+      field.parentNode.insertBefore(diffView, field.nextSibling);
+    }
+    
     field.dataset.zstHasDiff = 'true';
   }
 
   removeDiff(field) {
     if (field.dataset.zstHasDiff === 'true') {
-      const diffView = field.parentNode.querySelector('.zst-proofread-diff');
+      const rowContainer = field.parentNode;
+      let diffView;
+      if (rowContainer && rowContainer.classList.contains(CSS_CLASSES.fieldProofreadRow)) {
+        // 次の兄弟要素が diffView かどうか確認
+        let nextSibling = rowContainer.nextElementSibling;
+        while (nextSibling && !nextSibling.classList.contains('zst-proofread-diff')) {
+          nextSibling = nextSibling.nextElementSibling;
+        }
+        if (nextSibling && nextSibling.classList.contains('zst-proofread-diff')) {
+          diffView = nextSibling;
+        }
+      } else {
+        diffView = field.parentNode.querySelector('.zst-proofread-diff');
+      }
+      
       if (diffView) diffView.remove();
       delete field.dataset.zstHasDiff;
     }
