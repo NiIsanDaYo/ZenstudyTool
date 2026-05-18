@@ -273,16 +273,9 @@ const sumTimeResults = (results) => {
   return sums;
 };
 
-let didWarnExtensionContextInvalidated = false;
-
 const isExtensionContextInvalidatedError = (value) => {
   const message = typeof value === "string" ? value : value?.message || "";
   return /Extension context invalidated/i.test(message);
-};
-
-const reportExtensionContextInvalidated = (error) => {
-  if (didWarnExtensionContextInvalidated) return;
-  didWarnExtensionContextInvalidated = true;
 };
 
 const safeStorageGet = (defaults, callback) => {
@@ -290,9 +283,7 @@ const safeStorageGet = (defaults, callback) => {
     chrome.storage.local.get(defaults, (result) => {
       const lastError = chrome.runtime?.lastError || null;
       if (lastError) {
-        if (isExtensionContextInvalidatedError(lastError)) {
-          reportExtensionContextInvalidated(lastError);
-        } else {
+        if (!isExtensionContextInvalidatedError(lastError)) {
           console.warn("[ZenstudyTool] chrome.storage.local.get failed", lastError);
         }
         callback(defaults);
@@ -303,7 +294,6 @@ const safeStorageGet = (defaults, callback) => {
     });
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      reportExtensionContextInvalidated(error);
       callback(defaults);
       return;
     }
@@ -317,7 +307,6 @@ const addSafeStorageChangeListener = (listener) => {
     chrome.storage.onChanged.addListener(listener);
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      reportExtensionContextInvalidated(error);
       return;
     }
 
@@ -330,7 +319,6 @@ const addSafeRuntimeMessageListener = (listener) => {
     chrome.runtime.onMessage.addListener(listener);
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      reportExtensionContextInvalidated(error);
       return;
     }
 
@@ -343,7 +331,6 @@ const safeRuntimeSendMessage = (message, callback = () => {}) => {
     chrome.runtime.sendMessage(message, (response) => {
       const lastError = chrome.runtime?.lastError || null;
       if (lastError && isExtensionContextInvalidatedError(lastError)) {
-        reportExtensionContextInvalidated(lastError);
         callback(undefined, lastError);
         return;
       }
@@ -352,7 +339,6 @@ const safeRuntimeSendMessage = (message, callback = () => {}) => {
     });
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      reportExtensionContextInvalidated(error);
       callback(undefined, error);
       return;
     }
