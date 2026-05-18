@@ -33,6 +33,7 @@ const CSS_CLASSES = {
 
 const ACTION_IFRAME_SELECTOR = [
   'iframe[src*="/evaluation_tests/"]',
+  'iframe[src*="/evaluation_reports/"]',
   'iframe[src*="/essay_tests/"]',
   'iframe[src*="/essay_reports/"]',
   'iframe[src*="/reports/"]',
