@@ -1,24 +1,9 @@
-const GEMINI_MODEL_MODES = Object.freeze({
-  auto: 'auto',
-  manual: 'manual',
-});
-
-const GEMINI_MODEL_FALLBACK_ORDER = Object.freeze([
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-3-flash-preview',
-  'gemini-3.1-flash-lite',
-  'gemini-3.1-flash-lite-preview',
-  'gemma-4-31b',
-  'gemma-4-26b-a4b',
-  'gemma-3-27b',
-  'gemma-3-12b',
-  'gemma-3-4b',
-  'gemma-3-2b',
-  'gemma-3-1b',
-]);
-
-const DEFAULT_GEMINI_MODEL = GEMINI_MODEL_FALLBACK_ORDER[0];
+const {
+  STORAGE_KEYS,
+  GEMINI_MODEL_MODES,
+  GEMINI_MODEL_FALLBACK_ORDER,
+  DEFAULT_GEMINI_MODEL,
+} = globalThis.ZenstudyToolConstants;
 
 document.addEventListener('DOMContentLoaded', () => {
   const toggleFilter = document.getElementById('toggleFilter');
@@ -36,6 +21,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveGeminiApiKey = document.getElementById('saveGeminiApiKey');
   const geminiApiKeyStatus = document.getElementById('geminiApiKeyStatus');
   let lastSavedApiKey = '';
+
+  const storageDefaults = {
+    [STORAGE_KEYS.forceEssentialEnabled]: true,
+    [STORAGE_KEYS.showTotalTime]: true,
+    [STORAGE_KEYS.showDailyTarget]: true,
+    [STORAGE_KEYS.autoSkipEnabled]: false,
+    [STORAGE_KEYS.alwaysFocusEnabled]: true,
+    [STORAGE_KEYS.copyTextEnabled]: true,
+    [STORAGE_KEYS.downloadEnabled]: true,
+    [STORAGE_KEYS.slideDownloadEnabled]: true,
+    [STORAGE_KEYS.proofreadEnabled]: true,
+    [STORAGE_KEYS.geminiApiKey]: '',
+    [STORAGE_KEYS.geminiModelMode]: GEMINI_MODEL_MODES.auto,
+    [STORAGE_KEYS.geminiSelectedModel]: DEFAULT_GEMINI_MODEL,
+  };
+
+  const saveSetting = (key, value, callback) => {
+    chrome.storage.local.set({ [key]: value }, callback);
+  };
 
   // タブ切り替えロジック
   const tabBtns = document.querySelectorAll('.tab-btn');
@@ -77,13 +81,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const getCurrentModelSettings = () => {
     return {
-      geminiModelMode: normalizeModelMode(geminiModelMode?.value),
-      geminiSelectedModel: normalizeModelName(geminiSelectedModel?.value),
+      [STORAGE_KEYS.geminiModelMode]: normalizeModelMode(geminiModelMode?.value),
+      [STORAGE_KEYS.geminiSelectedModel]: normalizeModelName(geminiSelectedModel?.value),
     };
   };
 
   const getCurrentModeLabel = () => {
-    const { geminiModelMode: currentMode, geminiSelectedModel: currentModel } = getCurrentModelSettings();
+    const {
+      [STORAGE_KEYS.geminiModelMode]: currentMode,
+      [STORAGE_KEYS.geminiSelectedModel]: currentModel,
+    } = getCurrentModelSettings();
     return currentMode === GEMINI_MODEL_MODES.manual ? getModelDisplayName(currentModel) : '自動選択';
   };
 
@@ -116,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const geminiApiKey = geminiApiKeyInput.value.trim();
 
-    chrome.storage.local.set({ geminiApiKey }, () => {
+    saveSetting(STORAGE_KEYS.geminiApiKey, geminiApiKey, () => {
       const lastError = chrome.runtime?.lastError || null;
       if (lastError) {
         setApiKeyStatus('保存に失敗しました');
@@ -148,91 +155,78 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 初期状態を読み込んでUIのスイッチに反映
   chrome.storage.local.get(
-    {
-      forceEssentialEnabled: true,
-      showTotalTime: true,
-      showDailyTarget: true,
-      autoSkipEnabled: false,
-      alwaysFocusEnabled: true,
-      copyTextEnabled: true,
-      downloadEnabled: true,
-      slideDownloadEnabled: true,
-      proofreadEnabled: true,
-      geminiApiKey: '',
-      geminiModelMode: GEMINI_MODEL_MODES.auto,
-      geminiSelectedModel: DEFAULT_GEMINI_MODEL,
-    },
+    storageDefaults,
     (result) => {
-      toggleFilter.checked = result.forceEssentialEnabled;
-      if (toggleTime) toggleTime.checked = result.showTotalTime;
-      if (toggleDailyTarget) toggleDailyTarget.checked = result.showDailyTarget;
-      if (toggleAutoSkip) toggleAutoSkip.checked = result.autoSkipEnabled;
-      if (toggleAlwaysFocus) toggleAlwaysFocus.checked = result.alwaysFocusEnabled;
-      if (toggleCopyText) toggleCopyText.checked = result.copyTextEnabled;
-      if (toggleDownload) toggleDownload.checked = result.downloadEnabled;
-      if (toggleSlideDownload) toggleSlideDownload.checked = result.slideDownloadEnabled;
-      if (toggleProofread) toggleProofread.checked = result.proofreadEnabled;
-      if (geminiApiKeyInput) geminiApiKeyInput.value = result.geminiApiKey || '';
-      lastSavedApiKey = (result.geminiApiKey || '').trim();
-      if (geminiModelMode) geminiModelMode.value = normalizeModelMode(result.geminiModelMode);
-      if (geminiSelectedModel) geminiSelectedModel.value = normalizeModelName(result.geminiSelectedModel);
+      toggleFilter.checked = result[STORAGE_KEYS.forceEssentialEnabled];
+      if (toggleTime) toggleTime.checked = result[STORAGE_KEYS.showTotalTime];
+      if (toggleDailyTarget) toggleDailyTarget.checked = result[STORAGE_KEYS.showDailyTarget];
+      if (toggleAutoSkip) toggleAutoSkip.checked = result[STORAGE_KEYS.autoSkipEnabled];
+      if (toggleAlwaysFocus) toggleAlwaysFocus.checked = result[STORAGE_KEYS.alwaysFocusEnabled];
+      if (toggleCopyText) toggleCopyText.checked = result[STORAGE_KEYS.copyTextEnabled];
+      if (toggleDownload) toggleDownload.checked = result[STORAGE_KEYS.downloadEnabled];
+      if (toggleSlideDownload) toggleSlideDownload.checked = result[STORAGE_KEYS.slideDownloadEnabled];
+      if (toggleProofread) toggleProofread.checked = result[STORAGE_KEYS.proofreadEnabled];
+      if (geminiApiKeyInput) geminiApiKeyInput.value = result[STORAGE_KEYS.geminiApiKey] || '';
+      lastSavedApiKey = (result[STORAGE_KEYS.geminiApiKey] || '').trim();
+      if (geminiModelMode) geminiModelMode.value = normalizeModelMode(result[STORAGE_KEYS.geminiModelMode]);
+      if (geminiSelectedModel) geminiSelectedModel.value = normalizeModelName(result[STORAGE_KEYS.geminiSelectedModel]);
       updateModelUi();
 
-      const modeLabel = normalizeModelMode(result.geminiModelMode) === GEMINI_MODEL_MODES.manual
-        ? getModelDisplayName(normalizeModelName(result.geminiSelectedModel))
+      const modeLabel = normalizeModelMode(result[STORAGE_KEYS.geminiModelMode]) === GEMINI_MODEL_MODES.manual
+        ? getModelDisplayName(normalizeModelName(result[STORAGE_KEYS.geminiSelectedModel]))
         : '自動選択';
-      setApiKeyStatus(result.geminiApiKey ? `APIキー保存済み (${modeLabel})` : `APIキー未設定 (${modeLabel})`);
+      setApiKeyStatus(result[STORAGE_KEYS.geminiApiKey] ? `APIキー保存済み (${modeLabel})` : `APIキー未設定 (${modeLabel})`);
     }
   );
 
   // トグル変更時に即座に保存
   toggleFilter.addEventListener('change', () => {
-    chrome.storage.local.set({ forceEssentialEnabled: toggleFilter.checked });
+    saveSetting(STORAGE_KEYS.forceEssentialEnabled, toggleFilter.checked);
   });
 
   toggleTime.addEventListener('change', () => {
-    chrome.storage.local.set({ showTotalTime: toggleTime.checked });
+    saveSetting(STORAGE_KEYS.showTotalTime, toggleTime.checked);
   });
 
   if (toggleDailyTarget) {
     toggleDailyTarget.addEventListener('change', () => {
-      chrome.storage.local.set({ showDailyTarget: toggleDailyTarget.checked });
+      saveSetting(STORAGE_KEYS.showDailyTarget, toggleDailyTarget.checked);
     });
   }
 
   if (toggleAutoSkip) {
     toggleAutoSkip.addEventListener('change', () => {
-      chrome.storage.local.set({ autoSkipEnabled: toggleAutoSkip.checked });
+      saveSetting(STORAGE_KEYS.autoSkipEnabled, toggleAutoSkip.checked);
     });
   }
 
   if (toggleAlwaysFocus) {
     toggleAlwaysFocus.addEventListener('change', () => {
-      chrome.storage.local.set({ alwaysFocusEnabled: toggleAlwaysFocus.checked });
+      saveSetting(STORAGE_KEYS.alwaysFocusEnabled, toggleAlwaysFocus.checked);
     });
   }
 
   if (toggleCopyText) {
     toggleCopyText.addEventListener('change', () => {
-      chrome.storage.local.set({ copyTextEnabled: toggleCopyText.checked });
+      saveSetting(STORAGE_KEYS.copyTextEnabled, toggleCopyText.checked);
     });
   }
 
   if (toggleDownload) {
     toggleDownload.addEventListener('change', () => {
-      chrome.storage.local.set({ downloadEnabled: toggleDownload.checked });
+      saveSetting(STORAGE_KEYS.downloadEnabled, toggleDownload.checked);
     });
   }
 
   if (toggleSlideDownload) {
     toggleSlideDownload.addEventListener('change', () => {
-      chrome.storage.local.set({ slideDownloadEnabled: toggleSlideDownload.checked });
+      saveSetting(STORAGE_KEYS.slideDownloadEnabled, toggleSlideDownload.checked);
     });
   }
 
   if (toggleProofread) {
     toggleProofread.addEventListener('change', () => {
-      chrome.storage.local.set({ proofreadEnabled: toggleProofread.checked }, () => {
+      saveSetting(STORAGE_KEYS.proofreadEnabled, toggleProofread.checked, () => {
         const lastError = chrome.runtime?.lastError || null;
         if (lastError) {
           setApiKeyStatus('AI文章校正の設定保存に失敗しました');

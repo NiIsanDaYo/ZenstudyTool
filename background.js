@@ -7,6 +7,16 @@
  *   3. MP4/TS のダウンロード
  */
 
+importScripts('shared/constants.js');
+
+const {
+  GEMINI_MODEL_MODES,
+  GEMINI_MODEL_FALLBACK_ORDER: GEMINI_PROOFREAD_FALLBACK_MODELS,
+  DEFAULT_GEMINI_MODEL: DEFAULT_GEMINI_PROOFREAD_MODEL,
+  MESSAGE_TYPES,
+  STORAGE_KEYS,
+} = globalThis.ZenstudyToolConstants;
+
 // タブごとに最新の動画URLを保持
 const tabVideoUrls = new Map();
 const CONVERSION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -16,25 +26,6 @@ const GEMINI_MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DOWNLOAD_PATH_SEGMENT_MAX_LENGTH = 100;
 const WINDOWS_RESERVED_FILE_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-const GEMINI_MODEL_MODES = Object.freeze({
-  auto: 'auto',
-  manual: 'manual',
-});
-const GEMINI_PROOFREAD_FALLBACK_MODELS = Object.freeze([
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-3-flash-preview',
-  'gemini-3.1-flash-lite',
-  'gemini-3.1-flash-lite-preview',
-  'gemma-4-31b',
-  'gemma-4-26b-a4b',
-  'gemma-3-27b',
-  'gemma-3-12b',
-  'gemma-3-4b',
-  'gemma-3-2b',
-  'gemma-3-1b',
-]);
-const DEFAULT_GEMINI_PROOFREAD_MODEL = GEMINI_PROOFREAD_FALLBACK_MODELS[0];
 const PROOFREAD_SYSTEM_INSTRUCTION = 'You are a proofreading engine for student submissions. Only rewrite the student text itself. Never add explanations, labels, greetings, bullet points, quotations, or any extra text that is not meant to be submitted. Preserve the original meaning and language, and if the text is already acceptable, return it unchanged.';
 const PROOFREAD_RESPONSE_JSON_SCHEMA = Object.freeze({
   type: 'object',
@@ -243,7 +234,7 @@ function createRequestId() {
 function requestBlobRevoke(requestId, blobUrl) {
   if (!blobUrl) return;
   chrome.runtime.sendMessage({
-    type: 'ZST_REVOKE_BLOB_URL',
+    type: MESSAGE_TYPES.revokeBlobUrl,
     requestId,
     blobUrl,
   }).catch(() => {});
@@ -289,7 +280,7 @@ function sendTrackedDownloadProgress(tracked, force = false) {
   tracked.lastSentPercentage = percentage;
 
   sendConversionProgress({
-    type: 'ZST_CONVERSION_PROGRESS',
+    type: MESSAGE_TYPES.conversionProgress,
     phase: 'save',
     current,
     total,
@@ -836,13 +827,13 @@ async function proofreadWithGemini({ originalText, promptContext }) {
   }
 
   const {
-    geminiApiKey = '',
-    geminiModelMode = GEMINI_MODEL_MODES.auto,
-    geminiSelectedModel = DEFAULT_GEMINI_PROOFREAD_MODEL,
+    [STORAGE_KEYS.geminiApiKey]: geminiApiKey = '',
+    [STORAGE_KEYS.geminiModelMode]: geminiModelMode = GEMINI_MODEL_MODES.auto,
+    [STORAGE_KEYS.geminiSelectedModel]: geminiSelectedModel = DEFAULT_GEMINI_PROOFREAD_MODEL,
   } = await getLocalStorage({
-    geminiApiKey: '',
-    geminiModelMode: GEMINI_MODEL_MODES.auto,
-    geminiSelectedModel: DEFAULT_GEMINI_PROOFREAD_MODEL,
+    [STORAGE_KEYS.geminiApiKey]: '',
+    [STORAGE_KEYS.geminiModelMode]: GEMINI_MODEL_MODES.auto,
+    [STORAGE_KEYS.geminiSelectedModel]: DEFAULT_GEMINI_PROOFREAD_MODEL,
   });
   const apiKey = geminiApiKey.trim();
   if (!apiKey) {
@@ -934,7 +925,7 @@ async function proofreadWithGemini({ originalText, promptContext }) {
 
 async function trackBrowserDownload({ url, filename, sourceTabId, requestId, outputType, blobUrl = null }) {
   sendConversionProgress({
-    type: 'ZST_CONVERSION_PROGRESS',
+    type: MESSAGE_TYPES.conversionProgress,
     phase: 'save',
     current: 0,
     total: 0,
@@ -970,7 +961,7 @@ async function trackBrowserDownload({ url, filename, sourceTabId, requestId, out
       if (downloadItem.state === 'complete') {
         sendTrackedDownloadProgress(tracked, true);
         sendConversionProgress({
-          type: 'ZST_CONVERSION_PROGRESS',
+          type: MESSAGE_TYPES.conversionProgress,
           phase: 'done',
           success: true,
           requestId,
@@ -982,7 +973,7 @@ async function trackBrowserDownload({ url, filename, sourceTabId, requestId, out
 
       if (downloadItem.state === 'interrupted') {
         sendConversionProgress({
-          type: 'ZST_CONVERSION_PROGRESS',
+          type: MESSAGE_TYPES.conversionProgress,
           phase: 'error',
           success: false,
           requestId,
@@ -1018,7 +1009,7 @@ chrome.downloads.onChanged.addListener((delta) => {
     }
     sendTrackedDownloadProgress(tracked, true);
     sendConversionProgress({
-      type: 'ZST_CONVERSION_PROGRESS',
+      type: MESSAGE_TYPES.conversionProgress,
       phase: 'done',
       success: true,
       requestId: tracked.requestId,
@@ -1030,7 +1021,7 @@ chrome.downloads.onChanged.addListener((delta) => {
 
   if (delta.state?.current === 'interrupted' || delta.error?.current) {
     sendConversionProgress({
-      type: 'ZST_CONVERSION_PROGRESS',
+      type: MESSAGE_TYPES.conversionProgress,
       phase: 'error',
       success: false,
       requestId: tracked.requestId,
@@ -1074,7 +1065,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 
     // content.js に通知
     chrome.tabs.sendMessage(tabId, {
-      type: 'ZST_VIDEO_URL_DETECTED',
+      type: MESSAGE_TYPES.videoUrlDetected,
       videoInfo: videoInfo,
     }).catch(() => {
       // content script がまだロードされていない場合は無視
@@ -1089,7 +1080,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 // ============================================================
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'ZST_GET_VIDEO_URL') {
+  if (message.type === MESSAGE_TYPES.getVideoUrl) {
     // content.js から現在のタブの動画URLを問い合わせ
     const tabId = sender.tab?.id;
     if (tabId !== undefined) {
@@ -1101,18 +1092,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === 'ZST_DOWNLOAD_VIDEO') {
+  if (message.type === MESSAGE_TYPES.downloadVideo) {
     // ダウンロードリクエスト
     handleDownload(message, sender.tab?.id).then(sendResponse);
     return true; // 非同期レスポンス
   }
 
-  if (message.type === 'ZST_DOWNLOAD_SLIDE_IMAGES') {
+  if (message.type === MESSAGE_TYPES.downloadSlideImages) {
     downloadSlideImages(message, sender.tab?.id).then(sendResponse);
     return true;
   }
 
-  if (message.type === 'ZST_PROOFREAD_TEXT') {
+  if (message.type === MESSAGE_TYPES.proofreadText) {
     proofreadWithGemini(message)
       .then(({ correctedText, model, resolvedModel, strategy }) => {
         sendResponse({ success: true, correctedText, model, resolvedModel, strategy });
@@ -1186,7 +1177,7 @@ async function downloadSlideImages({ images, title, sectionTitle }, sourceTabId)
 
   try {
     sendConversionProgress({
-      type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+      type: MESSAGE_TYPES.slideDownloadProgress,
       phase: 'prepare',
       current: 0,
       total: normalizedImages.length,
@@ -1207,7 +1198,7 @@ async function downloadSlideImages({ images, title, sectionTitle }, sourceTabId)
       });
 
       sendConversionProgress({
-        type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+        type: MESSAGE_TYPES.slideDownloadProgress,
         phase: 'queue',
         current: index + 1,
         total: normalizedImages.length,
@@ -1216,7 +1207,7 @@ async function downloadSlideImages({ images, title, sectionTitle }, sourceTabId)
     }
 
     sendConversionProgress({
-      type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+      type: MESSAGE_TYPES.slideDownloadProgress,
       phase: 'done',
       success: true,
       current: normalizedImages.length,
@@ -1232,7 +1223,7 @@ async function downloadSlideImages({ images, title, sectionTitle }, sourceTabId)
     };
   } catch (error) {
     sendConversionProgress({
-      type: 'ZST_SLIDE_DOWNLOAD_PROGRESS',
+      type: MESSAGE_TYPES.slideDownloadProgress,
       phase: 'error',
       success: false,
       requestId,
@@ -1314,7 +1305,7 @@ async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, re
 
     const timeoutId = setTimeout(() => {
       sendConversionProgress({
-        type: 'ZST_CONVERSION_PROGRESS',
+        type: MESSAGE_TYPES.conversionProgress,
         phase: 'error',
         success: false,
         requestId,
@@ -1327,7 +1318,7 @@ async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, re
     const listener = (message) => {
       if (message.requestId !== requestId) return;
 
-      if (message.type === 'ZST_CONVERSION_COMPLETE') {
+      if (message.type === MESSAGE_TYPES.conversionComplete) {
         if (message.success) {
           const outputType = message.outputType === 'mp4' ? 'mp4' : 'ts';
           const blobUrl = message.blobUrl;
@@ -1350,7 +1341,7 @@ async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, re
             finish({ success: true, message: `${outputType.toUpperCase()}ダウンロード開始`, requestId });
           }).catch((err) => {
             sendConversionProgress({
-              type: 'ZST_CONVERSION_PROGRESS',
+              type: MESSAGE_TYPES.conversionProgress,
               phase: 'error',
               success: false,
               requestId,
@@ -1361,7 +1352,7 @@ async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, re
           });
         } else {
           sendConversionProgress({
-            type: 'ZST_CONVERSION_PROGRESS',
+            type: MESSAGE_TYPES.conversionProgress,
             phase: 'error',
             success: false,
             requestId,
@@ -1371,7 +1362,7 @@ async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, re
         }
       }
 
-      if (message.type === 'ZST_CONVERSION_PROGRESS') {
+      if (message.type === MESSAGE_TYPES.conversionProgress) {
         // 進捗は要求元タブに転送
         sendConversionProgress(message, sourceTabId);
       }
@@ -1381,12 +1372,12 @@ async function processM3U8Download(m3u8Url, title, sectionTitle, sourceTabId, re
 
     // offscreen に変換リクエストを送信
     chrome.runtime.sendMessage({
-      type: 'ZST_CONVERT_M3U8',
+      type: MESSAGE_TYPES.convertM3u8,
       m3u8Url: m3u8Url,
       requestId,
     }).catch((err) => {
       sendConversionProgress({
-        type: 'ZST_CONVERSION_PROGRESS',
+        type: MESSAGE_TYPES.conversionProgress,
         phase: 'error',
         success: false,
         requestId,

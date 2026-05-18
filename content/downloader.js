@@ -54,12 +54,12 @@ class ZenstudyToolDownloader {
     });
 
     addSafeRuntimeMessageListener((message) => {
-      if (message.type === 'ZST_VIDEO_URL_DETECTED') {
+      if (message.type === MESSAGE_TYPES.videoUrlDetected) {
         const didUpdate = this.applyVideoInfo(message.videoInfo);
         if (didUpdate && this.hasAnyDownloadEnabled()) this.checkAndShow();
-      } else if (message.type === 'ZST_CONVERSION_PROGRESS') {
+      } else if (message.type === MESSAGE_TYPES.conversionProgress) {
         this.updateProgress(message);
-      } else if (message.type === 'ZST_SLIDE_DOWNLOAD_PROGRESS') {
+      } else if (message.type === MESSAGE_TYPES.slideDownloadProgress) {
         this.updateSlideProgress(message);
       }
     });
@@ -180,7 +180,7 @@ class ZenstudyToolDownloader {
   }
 
   requestLatestVideoInfo() {
-    safeRuntimeSendMessage({ type: 'ZST_GET_VIDEO_URL' }, (response, error) => {
+    safeRuntimeSendMessage({ type: MESSAGE_TYPES.getVideoUrl }, (response, error) => {
       if (error) return;
       if (response && response.videoInfo && this.applyVideoInfo(response.videoInfo) && this.downloadEnabled) {
         this.checkAndShow();
@@ -264,14 +264,7 @@ class ZenstudyToolDownloader {
   }
 
   getIframeDocument(iframe) {
-    if (!iframe) return null;
-
-    try {
-      return iframe.contentDocument || iframe.contentWindow?.document || null;
-    } catch (err) {
-      console.warn('[ZenstudyTool] iframe document access failed', err);
-      return null;
-    }
+    return getAccessibleIframeDocument(iframe);
   }
 
   extractTitleFromDocument(doc) {
@@ -850,7 +843,7 @@ class ZenstudyToolDownloader {
     this.setBusyState(DOWNLOAD_BUTTON_TEXT.preparing);
 
     safeRuntimeSendMessage({
-      type: 'ZST_DOWNLOAD_VIDEO',
+      type: MESSAGE_TYPES.downloadVideo,
       videoInfo: requestedVideoInfo,
       title: this.title,
       sectionTitle: this.sectionTitle,
@@ -922,7 +915,7 @@ class ZenstudyToolDownloader {
       }
 
       safeRuntimeSendMessage({
-        type: 'ZST_DOWNLOAD_SLIDE_IMAGES',
+        type: MESSAGE_TYPES.downloadSlideImages,
         images,
         title: this.title,
         sectionTitle: this.sectionTitle,

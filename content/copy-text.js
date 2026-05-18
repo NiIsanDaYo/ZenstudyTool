@@ -32,13 +32,7 @@ class ZenstudyToolCopyText {
   }
 
   getIframeDocument(iframe) {
-    if (!iframe) return null;
-    try {
-      return iframe.contentDocument || iframe.contentWindow?.document || null;
-    } catch (err) {
-      console.warn('[ZenstudyTool] iframe document access failed', err);
-      return null;
-    }
+    return getAccessibleIframeDocument(iframe);
   }
 
   showButton(iframe) {

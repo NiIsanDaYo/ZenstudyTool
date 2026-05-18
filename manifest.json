@@ -36,6 +36,7 @@
         "zenstudy-tool.css"
       ],
       "js": [
+        "shared/constants.js",
         "content/utils.js",
         "content/auto-filter.js",
         "content/time-logic.js",

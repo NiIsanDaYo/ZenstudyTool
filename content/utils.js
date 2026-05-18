@@ -10,6 +10,11 @@
 
 // 定数
 
+const {
+  STORAGE_KEYS,
+  MESSAGE_TYPES,
+} = globalThis.ZenstudyToolConstants;
+
 /** CSSクラス名 */
 const CSS_CLASSES = {
   wrapper: "__ZENSTUDYTOOL_wrapper",
@@ -84,20 +89,6 @@ const FILTER_POLL_INTERVAL_MS = 2000;
 
 /** 自動スキップの遷移後に次の操作を待つ間隔 (ms) */
 const AUTO_SKIP_DELAY_MS = 1500;
-
-/** ストレージキー */
-const STORAGE_KEYS = {
-  forceEssentialEnabled: "forceEssentialEnabled",
-  showTotalTime: "showTotalTime",
-  showDailyTarget: "showDailyTarget",
-  autoSkipEnabled: "autoSkipEnabled",
-  alwaysFocusEnabled: "alwaysFocusEnabled",
-  copyTextEnabled: "copyTextEnabled",
-  downloadEnabled: "downloadEnabled",
-  slideDownloadEnabled: "slideDownloadEnabled",
-  proofreadEnabled: "proofreadEnabled",
-  geminiApiKey: "geminiApiKey",
-};
 
 /** ボタンのaria-label */
 const ARIA_LABELS = {
@@ -184,7 +175,7 @@ const formatDailyTime = (seconds) => {
   const h = Math.floor(totalSeconds / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
   const s = totalSeconds % 60;
-  
+
   let res = "";
   if (h > 0) res += `${h}時間`;
   if (m > 0 || h > 0) res += `${m}分`;
@@ -224,6 +215,17 @@ const createDebouncedObserver = (callback, delayMs = DEBOUNCE_MS, observeAttribu
   if (observeAttributes) config.attributes = true;
   observer.observe(document.body, config);
   return observer;
+};
+
+const getAccessibleIframeDocument = (iframe) => {
+  if (!iframe) return null;
+
+  try {
+    return iframe.contentDocument || iframe.contentWindow?.document || null;
+  } catch (err) {
+    console.warn('[ZenstudyTool] iframe document access failed', err);
+    return null;
+  }
 };
 
 /**
@@ -333,4 +335,4 @@ const safeRuntimeSendMessage = (message, callback = () => {}) => {
     throw error;
   }
 };
-
+

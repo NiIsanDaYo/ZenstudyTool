@@ -5,6 +5,8 @@
  * 変換不可の場合は TS へフォールバックする。
  */
 
+const { MESSAGE_TYPES } = globalThis.ZenstudyToolConstants;
+
 const INPUT_PLAYLIST_FILE = 'input.m3u8';
 const OUTPUT_MP4_FILE = 'output.mp4';
 
@@ -56,7 +58,7 @@ function revokeBlobUrl(blobUrl) {
 
 function sendProgress({ phase = 'init', current = 0, total = 0, ...rest } = {}) {
   chrome.runtime.sendMessage({
-    type: 'ZST_CONVERSION_PROGRESS',
+    type: MESSAGE_TYPES.conversionProgress,
     phase,
     current,
     total,
@@ -370,7 +372,7 @@ async function downloadFromM3U8(m3u8Url, requestId) {
       scheduleBlobRevoke(mp4BlobUrl);
 
       chrome.runtime.sendMessage({
-        type: 'ZST_CONVERSION_COMPLETE',
+        type: MESSAGE_TYPES.conversionComplete,
         requestId,
         success: true,
         blobUrl: mp4BlobUrl,
@@ -394,7 +396,7 @@ async function downloadFromM3U8(m3u8Url, requestId) {
     scheduleBlobRevoke(tsBlobUrl);
 
     chrome.runtime.sendMessage({
-      type: 'ZST_CONVERSION_COMPLETE',
+      type: MESSAGE_TYPES.conversionComplete,
       requestId,
       success: true,
       blobUrl: tsBlobUrl,
@@ -403,7 +405,7 @@ async function downloadFromM3U8(m3u8Url, requestId) {
   } catch (err) {
     console.error('[ZenstudyTool Offscreen] エラー:', err);
     chrome.runtime.sendMessage({
-      type: 'ZST_CONVERSION_COMPLETE',
+      type: MESSAGE_TYPES.conversionComplete,
       requestId,
       success: false,
       error: err.message,
@@ -416,13 +418,13 @@ async function downloadFromM3U8(m3u8Url, requestId) {
 // ============================================================
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'ZST_CONVERT_M3U8') {
+  if (message.type === MESSAGE_TYPES.convertM3u8) {
     // メッセージタイプ名は互換性のため維持
     enqueueConversion(() => downloadFromM3U8(message.m3u8Url, message.requestId));
     return;
   }
 
-  if (message.type === 'ZST_REVOKE_BLOB_URL') {
+  if (message.type === MESSAGE_TYPES.revokeBlobUrl) {
     revokeBlobUrl(message.blobUrl);
   }
 });

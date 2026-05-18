@@ -72,13 +72,7 @@ class ZenstudyToolProofreader {
   }
 
   getIframeDocument(iframe) {
-    if (!iframe) return null;
-    try {
-      return iframe.contentDocument || iframe.contentWindow?.document || null;
-    } catch (err) {
-      console.warn('[ZenstudyTool] iframe document access failed', err);
-      return null;
-    }
+    return getAccessibleIframeDocument(iframe);
   }
 
   showButton(iframe) {
@@ -298,7 +292,7 @@ class ZenstudyToolProofreader {
   requestProofread(payload) {
     return new Promise((resolve, reject) => {
       safeRuntimeSendMessage({
-        type: 'ZST_PROOFREAD_TEXT',
+        type: MESSAGE_TYPES.proofreadText,
         originalText: payload.value,
         promptContext: payload.context,
       }, (response, lastError) => {
